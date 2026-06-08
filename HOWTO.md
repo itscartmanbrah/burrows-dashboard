@@ -14,8 +14,9 @@ This guide covers how to set up, run, and operate the Burrows Dashboard project 
 4. [Authentication](#4-authentication)
 5. [Environment Variables](#5-environment-variables)
 6. [Adding New Pages / Tools](#6-adding-new-pages--tools)
-7. [Build & Deployment Workflow](#7-build--deployment-workflow)
-8. [Troubleshooting](#8-troubleshooting)
+7. [Store Performance Dashboard — How the Widgets Work](#7-store-performance-dashboard--how-the-widgets-work)
+8. [Build & Deployment Workflow](#8-build--deployment-workflow)
+9. [Troubleshooting](#9-troubleshooting)
 
 ---
 
@@ -27,12 +28,15 @@ It consists of two parts:
 - **`backend/`** — a Node.js/Express REST API that talks to PostgreSQL and exposes data to the frontend (with authentication)
 - **`frontend/`** — a React (Vite) single-page application — the actual dashboard UI
 
-**Current status (Phase 0 — Foundations):** The skeleton is complete and verified end-to-end:
-- Backend API running with JWT-based admin login and a working DB connection
-- Frontend shell with login page, protected routes, sidebar navigation, and a placeholder homepage that pulls live data from the database through the authenticated API
+**Current status:**
+- ✅ **Phase 0 — Foundations:** Backend API with JWT-based admin login + working DB connection; frontend shell with login, protected routes, and sidebar navigation.
+- ✅ **Phase 1 — Store Performance Dashboard (partial):** The homepage now shows two **live** widgets:
+  - **Today's Sales by Store** — transaction count and total tendered (collected) sales per store for the current date
+  - **Highest Supplier Cost (Stock on Hand)** — total inventory cost value (cost price × quantity on hand) ranked by vendor
+- ⏳ **Phase 3 (pending):** A third homepage widget — *current Pandora stock cost* — will be added once the Pandora reference data (build-to-levels / discontinued list CSV) has been imported in Phase 2.
 
 **Planned tools (placeholders currently in the nav, to be built in later phases):**
-- **Store Performance Dashboard** (homepage) — today's sales per store, current Pandora stock value, highest supplier cost
+- **Store Performance Dashboard** (homepage) — ✅ partially live (see above); Pandora stock-cost widget pending
 - **Showcase Debt Reduction** — tracks debt paydown using Xero + sales/cost data
 - **Pandora Ordering** — generates reorder suggestions from a supplier build-to-level CSV vs. current stock
 - **Pandora Discontinued Products** — marks/manages discontinued Pandora design numbers
@@ -52,7 +56,7 @@ burrows-dashboard/
 │   ├── routes/
 │   │   ├── auth.js           # POST /api/auth/login
 │   │   ├── health.js         # GET  /api/health  (DB connectivity check)
-│   │   └── overview.js       # GET  /api/overview (temporary pipeline-check endpoint)
+│   │   └── dashboard.js      # GET  /api/dashboard/today-sales, /top-suppliers
 │   ├── .env                  # Local secrets/config (NOT committed)
 │   ├── .env.example          # Template for .env
 │   └── .gitignore
@@ -68,7 +72,8 @@ burrows-dashboard/
 │   │   │   └── ProtectedRoute.jsx # Redirects to /login if not authenticated
 │   │   ├── pages/
 │   │   │   ├── Login.jsx
-│   │   │   ├── StorePerformance.jsx  # Homepage (placeholder pipeline-check for now)
+│   │   │   ├── StorePerformance.jsx  # Homepage — live widgets (today's sales, top suppliers)
+│   │   │   ├── StorePerformance.css
 │   │   │   └── Placeholder.jsx       # Generic "coming soon" page for unbuilt tools
 │   │   ├── App.jsx           # Route definitions
 │   │   └── main.jsx          # App bootstrap
@@ -165,7 +170,7 @@ Both `.env` files are excluded from git via `.gitignore` — copy from the match
 The app is structured so new tools slot in cleanly:
 
 **Backend** — add a new route module:
-1. Create `backend/routes/<feature>.js` (model it on `routes/overview.js`)
+1. Create `backend/routes/<feature>.js` (model it on `routes/dashboard.js`)
 2. Protect it with `const { requireAuth } = require('../middleware/auth');`
 3. Register it in `backend/index.js`: `app.use('/api/<feature>', require('./routes/<feature>'));`
 
@@ -178,7 +183,27 @@ This keeps every tool self-contained while sharing the same login, layout, and A
 
 ---
 
-## 7. Build & Deployment Workflow
+## 7. Store Performance Dashboard — How the Widgets Work
+
+The homepage (`frontend/src/pages/StorePerformance.jsx`) is a grid of "widget cards," each backed by its own endpoint in `backend/routes/dashboard.js`. All queries are **read-only** against the synced mirror tables (never written to).
+
+### Today's Sales by Store
+- **Endpoint:** `GET /api/dashboard/today-sales`
+- **What it shows:** transaction count + total sales for the current date, for every store (including ones with $0 today, or ones that don't sync through EdgePulse — e.g. Mildura Showcase Jewellers and the Warehouse currently show no EdgePulse sales activity).
+- **How "total sales" is calculated:** sums `EP_SaleLines` rows where `slKey1 = 'TENDER'` (i.e. amounts actually tendered/collected — cash, card, gift cards, layaway payments, etc.), excluding voided sales. This mirrors what the figures look like in EdgePulse itself, rather than raw invoiced line totals (we found these can differ — see the troubleshooting notes in `burrows-db-sync`'s history for why).
+- **Note on "today":** this uses the database server's `CURRENT_DATE`. Locally, your data will only be as fresh as your last local sync — the **live, current** numbers appear once this runs against the production database on the server (synced nightly at 2 AM).
+
+### Highest Supplier Cost (Stock on Hand)
+- **Endpoint:** `GET /api/dashboard/top-suppliers?limit=8`
+- **What it shows:** for each vendor, the total cost-price value of inventory currently on hand (`Items.Cost × ItemQOH.AvailQOH`, summed across all stores), ranked highest first. This answers "which supplier do we have the most money tied up in stock with."
+- Useful early finding: **Pandora Jewellery (`VendorID = 'PANDO'`)** is currently the largest single cost exposure — ~$232K tied up in ~5,500 units. (Note: this is the *vendor*-based view; the dedicated Pandora stock-cost widget planned for Phase 3 will use the more reliable Design-Number-based matching against the Pandora reference list, since not all Pandora stock is necessarily filed under that vendor.)
+
+### Adding more widgets
+Follow the same pattern: add a query function to `routes/dashboard.js` (or a new route file for a different page), then add a corresponding card component to the page. Keep each widget's loading/error state independent so one slow query doesn't block the others.
+
+---
+
+## 8. Build & Deployment Workflow
 
 **Local-first, always:**
 1. Build and test the feature completely on your local machine (against your local `burrows_jewellers` database)
@@ -189,7 +214,7 @@ Deployment steps for the dashboard itself (Nginx reverse proxy, process manager,
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 ### Backend won't start / can't connect to the database
 - Confirm PostgreSQL is running locally and `burrows_jewellers` exists (this is the same database used by `burrows-db-sync` — if that project works, the credentials should match)
