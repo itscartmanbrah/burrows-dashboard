@@ -104,27 +104,52 @@ router.get('/top-suppliers', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/dashboard/sales-pace
-// Compares each target store's actual cumulative sales today against a
-// "pace" line — that month's $ target spread evenly across the day's
-// trading hours (9am–5pm). Lets staff see at a glance whether today is
-// tracking ahead of or behind where it needs to be to hit the monthly goal.
+// GET /api/dashboard/sales-pace?date=YYYY-MM-DD
+// Compares each target store's actual cumulative sales on a given day
+// against a "pace" line — that month's $ target spread evenly across the
+// day's trading hours (9am–5pm). Lets staff see at a glance whether a day
+// is tracking ahead of or behind where it needs to be to hit the monthly
+// goal. Defaults to today; pass ?date= to look at any other day (e.g. to
+// review yesterday's performance, or compare against the same day last week).
 //
 // Daily target = monthly target ÷ number of days in the month (a simple
 // even split — EdgePulse's own dashboard may weight it slightly differently
 // e.g. by trading days or day-of-week patterns, so treat this as a guide
 // rather than an exact mirror of their figure).
 //
-// Only stores with a configured target (see config/salesTargets.js) appear.
+// Only stores with a configured target for that year (see
+// config/salesTargets.js) appear.
 router.get('/sales-pace', requireAuth, async (req, res) => {
   try {
-    // Resolve "today"/"now" in the stores' own local timezone.
+    // "Today" in the stores' own local timezone — used both as the default
+    // date and to work out whether the requested date is today, in the
+    // past, or in the future (which determines how far the actual line draws).
     const nowResult = await pool.query('SELECT (now() AT TIME ZONE $1) AS local_now', [STORE_TZ]);
     const localNow = new Date(nowResult.rows[0].local_now);
-    const year = localNow.getFullYear();
-    const month = localNow.getMonth(); // 0-11
-    const dateStr = localNow.toISOString().slice(0, 10);
-    const currentHour = localNow.getHours() + localNow.getMinutes() / 60;
+    const todayStr = localNow.toISOString().slice(0, 10);
+
+    const dateStr = typeof req.query.date === 'string' && req.query.date ? req.query.date : todayStr;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      return res.status(400).json({ error: 'Invalid "date" — expected format YYYY-MM-DD' });
+    }
+    const selectedDate = new Date(`${dateStr}T00:00:00`);
+    if (Number.isNaN(selectedDate.getTime())) {
+      return res.status(400).json({ error: 'Invalid "date" — not a real calendar date' });
+    }
+
+    const isToday = dateStr === todayStr;
+    const isFuture = dateStr > todayStr;
+    const year = selectedDate.getFullYear();
+    const month = selectedDate.getMonth(); // 0-11
+
+    // How far the "actual" line should be drawn for the selected date:
+    //   • today        → up to the real current time
+    //   • a past date  → the whole trading day already happened
+    //   • a future date → nothing has happened yet
+    let currentHour;
+    if (isToday) currentHour = localNow.getHours() + localNow.getMinutes() / 60;
+    else if (isFuture) currentHour = TRADING_OPEN_HOUR;
+    else currentHour = TRADING_CLOSE_HOUR;
 
     const targetsForYear = SALES_TARGETS[year] || {};
     const storeIds = Object.keys(targetsForYear).map(Number);
@@ -132,6 +157,7 @@ router.get('/sales-pace', requireAuth, async (req, res) => {
     if (storeIds.length === 0) {
       return res.json({
         date: dateStr,
+        isToday,
         tradingHours: { open: TRADING_OPEN_HOUR, close: TRADING_CLOSE_HOUR },
         currentHour,
         stores: [],
@@ -140,12 +166,12 @@ router.get('/sales-pace', requireAuth, async (req, res) => {
       });
     }
 
-    // Hourly TENDER totals for the target stores, today only.
+    // Hourly TENDER totals for the target stores on the selected date.
+    // saledate is a naive "local wall-clock time" timestamp — same
+    // convention as the YYYY-MM-DD date string — so a direct date-literal
+    // comparison is correct with no timezone conversion needed here.
     const actualResult = await pool.query(
       `
-      WITH bounds AS (
-        SELECT date_trunc('day', now() AT TIME ZONE $1) AS day_start
-      )
       SELECT s.storeid                                              AS "storeId",
              EXTRACT(HOUR FROM s.saledate)::int                     AS hour,
              COALESCE(SUM(
@@ -154,18 +180,17 @@ router.get('/sales-pace', requireAuth, async (req, res) => {
                     ELSE 0 END
              ), 0)                                                  AS "hourTotal"
       FROM EP_Sales s
-      JOIN bounds b
-        ON s.saledate >= b.day_start
-       AND s.saledate <  b.day_start + INTERVAL '1 day'
       JOIN EP_SaleLines sl
         ON sl.storeid = s.storeid
        AND sl.saleid  = s.saleid
-      WHERE s.storeid = ANY($2::int[])
+      WHERE s.storeid = ANY($1::int[])
         AND s.voided = false
+        AND s.saledate >= $2::date
+        AND s.saledate <  $2::date + INTERVAL '1 day'
       GROUP BY s.storeid, hour
       ORDER BY s.storeid, hour;
       `,
-      [STORE_TZ, storeIds]
+      [storeIds, dateStr]
     );
 
     const storesResult = await pool.query(
@@ -200,8 +225,9 @@ router.get('/sales-pace', requireAuth, async (req, res) => {
     });
 
     // One row per trading hour: each store's cumulative actual (null once
-    // past "now", so the line stops where today currently stands) and its
-    // straight-line target pace from $0 at opening to dailyTarget at close.
+    // past the "elapsed" point for this date, so the line stops where that
+    // day currently stands) and its straight-line target pace from $0 at
+    // opening to dailyTarget at close.
     const chartData = [];
     for (let h = TRADING_OPEN_HOUR; h <= TRADING_CLOSE_HOUR; h++) {
       const row = { hour: h };
@@ -216,6 +242,7 @@ router.get('/sales-pace', requireAuth, async (req, res) => {
 
     res.json({
       date: dateStr,
+      isToday,
       tradingHours: { open: TRADING_OPEN_HOUR, close: TRADING_CLOSE_HOUR },
       currentHour,
       stores: stores.map(({ cumulativeByHour, ...rest }) => rest),

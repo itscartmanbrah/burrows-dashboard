@@ -205,26 +205,74 @@ const compactCurrency = new Intl.NumberFormat('en-AU', {
   maximumFractionDigits: 0,
 });
 
+// Today's date as YYYY-MM-DD in the store's own timezone (Australia/Melbourne)
+// — used as the date picker's default value and its `max` (no peeking at
+// "future" days that haven't happened yet).
+function todayInMelbourne() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Australia/Melbourne',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
+const dateLabelFormat = new Intl.DateTimeFormat('en-AU', {
+  weekday: 'short',
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+});
+
 function SalesPaceCard() {
+  const todayStr = todayInMelbourne();
+  const [selectedDate, setSelectedDate] = useState(todayStr);
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    setData(null);
+    setError(null);
     apiClient
-      .get('/dashboard/sales-pace')
+      .get(`/dashboard/sales-pace?date=${selectedDate}`)
       .then((res) => setData(res.data))
       .catch((err) => setError(err.response?.data?.error || err.message));
-  }, []);
+  }, [selectedDate]);
+
+  const isToday = selectedDate === todayStr;
+  let dateLabel = selectedDate;
+  try {
+    dateLabel = dateLabelFormat.format(new Date(`${selectedDate}T00:00:00`));
+  } catch {
+    // fall back to the raw string if parsing fails
+  }
 
   return (
     <Card>
       <CardHeader className="flex flex-row items-start justify-between space-y-0">
         <div>
           <CardTitle className="text-base">Sales Pace vs Target</CardTitle>
-          <CardDescription>Today's cumulative sales against each store's daily target</CardDescription>
+          <CardDescription>
+            {isToday ? "Today's" : `${dateLabel}'s`} cumulative sales against each store's daily target
+          </CardDescription>
         </div>
-        <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <Target className="size-4" />
+        <div className="flex items-center gap-3">
+          <div className="flex flex-col items-end gap-1">
+            <label htmlFor="sales-pace-date" className="text-[11px] font-medium text-muted-foreground">
+              View date
+            </label>
+            <input
+              id="sales-pace-date"
+              type="date"
+              value={selectedDate}
+              max={todayStr}
+              onChange={(e) => e.target.value && setSelectedDate(e.target.value)}
+              className="h-8 rounded-md border border-input bg-background px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+          </div>
+          <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <Target className="size-4" />
+          </div>
         </div>
       </CardHeader>
       <CardContent>
@@ -274,14 +322,16 @@ function SalesPaceCard() {
                     }}
                   />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
-                  {data.currentHour >= data.tradingHours.open && data.currentHour <= data.tradingHours.close && (
-                    <ReferenceLine
-                      x={data.currentHour}
-                      stroke="hsl(var(--muted-foreground))"
-                      strokeDasharray="4 4"
-                      label={{ value: 'Now', position: 'insideTopRight', fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
-                    />
-                  )}
+                  {data.isToday &&
+                    data.currentHour >= data.tradingHours.open &&
+                    data.currentHour <= data.tradingHours.close && (
+                      <ReferenceLine
+                        x={data.currentHour}
+                        stroke="hsl(var(--muted-foreground))"
+                        strokeDasharray="4 4"
+                        label={{ value: 'Now', position: 'insideTopRight', fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                      />
+                    )}
                   {data.stores.map((store) => {
                     const color = STORE_COLORS[store.storeId] || '#6b7280';
                     return (
@@ -343,7 +393,10 @@ function SalesPaceCard() {
             </div>
 
             <p className="mt-3 text-xs text-muted-foreground">
-              Daily goal = monthly target ÷ days in the month, paced evenly across trading hours (9am–5pm). As of {data.date}.
+              Daily goal = monthly target ÷ days in the month, paced evenly across trading hours (9am–5pm).{' '}
+              {data.isToday
+                ? `Showing today (${dateLabel}) so far.`
+                : `Showing the full trading day for ${dateLabel}.`}
             </p>
           </>
         )}
