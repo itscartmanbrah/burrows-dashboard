@@ -9,7 +9,7 @@ const cors = require('cors');
 
 const healthRoutes = require('./routes/health');
 const authRoutes = require('./routes/auth');
-const overviewRoutes = require('./routes/overview');
+const dashboardRoutes = require('./routes/dashboard');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -20,7 +20,7 @@ app.use(express.json());
 // Routes
 app.use('/api/health', healthRoutes);
 app.use('/api/auth', authRoutes);
-app.use('/api/overview', overviewRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 // 404 handler
 app.use((req, res) => {
