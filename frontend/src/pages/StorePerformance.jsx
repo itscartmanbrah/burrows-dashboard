@@ -7,7 +7,7 @@
 // has been imported.
 
 import { Fragment, useEffect, useState } from 'react';
-import { TrendingUp, Package, Target, Activity, Loader2 } from 'lucide-react';
+import { TrendingUp, Package, Target, Activity, Trophy, Loader2 } from 'lucide-react';
 import {
   ResponsiveContainer,
   LineChart,
@@ -28,6 +28,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 const currency = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' });
 const number = new Intl.NumberFormat('en-AU');
@@ -654,6 +655,146 @@ function SalesTrendCard() {
   );
 }
 
+const SUPPLIER_PERIODS = [
+  { key: 'daily', label: 'Today' },
+  { key: 'monthly', label: 'This Month' },
+  { key: 'yearly', label: 'This Year' },
+];
+
+// "Top Performing Suppliers" — ranks vendors by total sales revenue
+// generated from their items (item-line sales net of refunds), across
+// three calendar windows (today / month-to-date / year-to-date), switchable
+// via tabs and filterable per-store. Complements the existing "Highest
+// Supplier Cost" widget (which measures stock-on-hand cost value, not sales
+// performance) by answering "whose products are actually selling".
+function SupplierPerformanceCard() {
+  // 'all' combines every store into one view — the most useful overview
+  // and the default; switching to a specific store id filters to it alone.
+  const [storeId, setStoreId] = useState('all');
+  const [period, setPeriod] = useState('monthly');
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    setData(null);
+    setError(null);
+    apiClient
+      .get(`/dashboard/supplier-performance?store=${storeId}&limit=8`)
+      .then((res) => setData(res.data))
+      .catch((err) => setError(err.response?.data?.error || err.message));
+  }, [storeId]);
+
+  const active = data ? data.periods[period] : null;
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between space-y-0">
+        <div>
+          <CardTitle className="text-base">Top Performing Suppliers</CardTitle>
+          <CardDescription>
+            {active ? `Ranked by sales revenue — ${active.label}` : 'Ranked by sales revenue generated from each supplier’s items'}
+          </CardDescription>
+        </div>
+        <div className="flex items-center gap-3">
+          {data && data.availableStores.length > 0 && (
+            <div className="flex flex-col items-end gap-1">
+              <label htmlFor="supplier-perf-store" className="text-[11px] font-medium text-muted-foreground">
+                Store
+              </label>
+              <select
+                id="supplier-perf-store"
+                value={storeId}
+                onChange={(e) => setStoreId(e.target.value)}
+                className="h-8 rounded-md border border-input bg-background px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <option value="all">All Stores</option>
+                {data.availableStores.map((s) => (
+                  <option key={s.storeId} value={s.storeId}>
+                    {s.storeName}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <Trophy className="size-4" />
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {error && (
+          <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            Error: {error}
+          </p>
+        )}
+        {!error && !data && (
+          <CardState icon={Loader2}>
+            <span className="animate-pulse">Loading…</span>
+          </CardState>
+        )}
+        {data && (
+          <Tabs value={period} onValueChange={setPeriod}>
+            <TabsList>
+              {SUPPLIER_PERIODS.map((p) => (
+                <TabsTrigger key={p.key} value={p.key}>
+                  {p.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            {SUPPLIER_PERIODS.map((p) => {
+              const periodData = data.periods[p.key];
+              const scopeLabel = data.store.storeId === 'all' ? 'all stores combined' : data.store.storeName;
+              return (
+                <TabsContent key={p.key} value={p.key}>
+                  {periodData.suppliers.length === 0 ? (
+                    <p className="rounded-md bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
+                      No item sales recorded for {scopeLabel} in this period yet.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="overflow-hidden rounded-lg border">
+                        <table className="w-full text-sm">
+                          <thead className="bg-muted/60 text-xs uppercase tracking-wide text-muted-foreground">
+                            <tr>
+                              <th className="px-3 py-2 text-left font-medium">Supplier</th>
+                              <th className="px-3 py-2 text-right font-medium">Items Sold</th>
+                              <th className="px-3 py-2 text-right font-medium">Transactions</th>
+                              <th className="px-3 py-2 text-right font-medium">Revenue</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y">
+                            {periodData.suppliers.map((s, i) => (
+                              <tr key={s.vendorId} className="hover:bg-muted/40">
+                                <td className="px-3 py-2 font-medium">
+                                  <div className="flex items-center gap-2">
+                                    {i === 0 && <Badge variant="success">Top</Badge>}
+                                    {s.vendorName}
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2 text-right tabular-nums">{number.format(s.qty)}</td>
+                                <td className="px-3 py-2 text-right tabular-nums">{number.format(s.transactions)}</td>
+                                <td className="px-3 py-2 text-right tabular-nums">{currency.format(s.revenue)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <p className="mt-3 text-xs text-muted-foreground">
+                        Total revenue from item sales across these suppliers ({scopeLabel}): {currency.format(periodData.totalRevenue)}.
+                        Figures are net of refunds and exclude quotes and voided sales.
+                      </p>
+                    </>
+                  )}
+                </TabsContent>
+              );
+            })}
+          </Tabs>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function StorePerformance() {
   return (
     <div className="flex flex-col gap-6">
@@ -670,6 +811,8 @@ export default function StorePerformance() {
       <SalesPaceCard />
 
       <SalesTrendCard />
+
+      <SupplierPerformanceCard />
 
       <p className="text-xs text-muted-foreground">
         Note: a fourth widget — current Pandora stock cost — will appear here once the Pandora

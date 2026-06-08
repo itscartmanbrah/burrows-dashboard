@@ -17,6 +17,11 @@ const STORE_TZ = 'Australia/Melbourne';
 const TRADING_OPEN_HOUR = 9;   // 9:00am
 const TRADING_CLOSE_HOUR = 17; // 5:00pm
 
+// Stores to leave out of per-store filter dropdowns across dashboard widgets
+// (MSJ and the Warehouse aren't relevant for these comparisons — per
+// instruction, don't add them back into store-selector widgets going forward).
+const STORE_FILTER_EXCLUDE_IDS = [2, 4]; // 2 = Mildura Showcase Jewellers, 4 = Warehouse
+
 function daysInMonth(year, monthIndex /* 0-11 */) {
   return new Date(year, monthIndex + 1, 0).getDate();
 }
@@ -463,6 +468,162 @@ router.get('/sales-trend', requireAuth, async (req, res) => {
         monthTotal: Number(runningLastYear.toFixed(2)),
       },
       chartData,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/dashboard/supplier-performance?store=<storeId|all>&limit=N
+// Ranks vendors/suppliers by total sales revenue generated from their items
+// — "which supplier's products are selling best" — across three calendar
+// windows at once: today, this month-to-date, and this year-to-date.
+//
+// Revenue is summed from item-level sale lines (unitsellprice × quantity),
+// joined Items → Vendors via itemkey/sku. Both 'ItemSale' and 'ItemRefund'
+// lines are included — refund lines carry negative quantities, so the sum
+// nets returns out automatically. Quotes and voided sales are excluded.
+//
+// Filterable by store (or "all" for every store combined, the default) so
+// staff can see which suppliers are driving sales at a particular location.
+// Unlike the sales-pace/trend widgets, this isn't tied to SALES_TARGETS —
+// every store in the Stores table is selectable.
+router.get('/supplier-performance', requireAuth, async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 8, 50);
+
+  try {
+    const nowResult = await pool.query('SELECT (now() AT TIME ZONE $1) AS local_now', [STORE_TZ]);
+    const localNow = new Date(nowResult.rows[0].local_now);
+    const year = localNow.getFullYear();
+    const month = localNow.getMonth(); // 0-11
+    const day = localNow.getDate();
+
+    // Date bounds as plain YYYY-MM-DD strings — saledate is a naive local
+    // "wall clock" timestamp, so direct date-literal comparisons need no
+    // timezone conversion (consistent with sales-pace / sales-trend).
+    const pad = (n) => String(n).padStart(2, '0');
+    const ymd = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`;
+
+    const todayStr = ymd(year, month, day);
+    const tomorrow = new Date(year, month, day + 1);
+    const tomorrowStr = ymd(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate());
+    const monthStartStr = ymd(year, month, 1);
+    const yearStartStr = ymd(year, 0, 1);
+
+    const storesResult = await pool.query(
+      `SELECT storeid AS "storeId", shortname AS "storeName", longname AS "storeLongName"
+       FROM Stores
+       WHERE storeid <> ALL($1::int[])
+       ORDER BY storeid`,
+      [STORE_FILTER_EXCLUDE_IDS]
+    );
+    const availableStores = storesResult.rows;
+    const allStoreIds = availableStores.map((s) => s.storeId);
+
+    // ?store=<id> filters to that single store; ?store=all (or anything
+    // else, including a missing param) combines every store — the most
+    // useful overview, so it's the default.
+    const requestedStoreId = parseInt(req.query.store, 10);
+    const singleStoreId = allStoreIds.includes(requestedStoreId) ? requestedStoreId : null;
+    const filterStoreIds = singleStoreId != null ? [singleStoreId] : allStoreIds;
+
+    const store = singleStoreId != null
+      ? availableStores.find((s) => s.storeId === singleStoreId)
+      : {
+          storeId: 'all',
+          storeName: 'All Stores',
+          storeLongName: `All stores combined (${availableStores.map((s) => s.storeName).join(' + ')})`,
+        };
+
+    // Single pass over the broadest window (year-to-date) with conditional
+    // aggregation buckets each vendor's revenue into all three periods at
+    // once — far cheaper than scanning EP_SaleLines three separate times.
+    const result = await pool.query(
+      `
+      SELECT v.vendorid AS "vendorId",
+             v.name     AS "vendorName",
+             ROUND(SUM(CASE WHEN s.saledate >= $2::date THEN sl.unitsellprice * sl.quantity ELSE 0 END), 2) AS "dailyRevenue",
+             SUM(CASE WHEN s.saledate >= $2::date THEN sl.quantity ELSE 0 END)                              AS "dailyQty",
+             COUNT(DISTINCT CASE WHEN s.saledate >= $2::date THEN s.saleid END)                             AS "dailyTxns",
+             ROUND(SUM(CASE WHEN s.saledate >= $3::date THEN sl.unitsellprice * sl.quantity ELSE 0 END), 2) AS "monthlyRevenue",
+             SUM(CASE WHEN s.saledate >= $3::date THEN sl.quantity ELSE 0 END)                              AS "monthlyQty",
+             COUNT(DISTINCT CASE WHEN s.saledate >= $3::date THEN s.saleid END)                             AS "monthlyTxns",
+             ROUND(SUM(sl.unitsellprice * sl.quantity), 2)                                                  AS "yearlyRevenue",
+             SUM(sl.quantity)                                                                               AS "yearlyQty",
+             COUNT(DISTINCT s.saleid)                                                                       AS "yearlyTxns"
+      FROM EP_Sales s
+      JOIN EP_SaleLines sl ON sl.storeid = s.storeid AND sl.saleid = s.saleid
+      JOIN Items i         ON i.sku = sl.itemkey
+      JOIN Vendors v       ON v.vendorid = i.vendorid
+      WHERE s.storeid = ANY($1::int[])
+        AND s.voided = false
+        AND sl.isquote = false
+        AND sl.entrytype IN ('ItemSale', 'ItemRefund')
+        AND s.saledate >= $4::date
+        AND s.saledate <  $5::date
+      GROUP BY v.vendorid, v.name;
+      `,
+      [filterStoreIds, todayStr, monthStartStr, yearStartStr, tomorrowStr]
+    );
+
+    const rows = result.rows.map((r) => ({
+      vendorId: r.vendorId,
+      vendorName: r.vendorName,
+      dailyRevenue: Number(r.dailyRevenue),
+      dailyQty: Number(r.dailyQty),
+      dailyTxns: Number(r.dailyTxns),
+      monthlyRevenue: Number(r.monthlyRevenue),
+      monthlyQty: Number(r.monthlyQty),
+      monthlyTxns: Number(r.monthlyTxns),
+      yearlyRevenue: Number(r.yearlyRevenue),
+      yearlyQty: Number(r.yearlyQty),
+      yearlyTxns: Number(r.yearlyTxns),
+    }));
+
+    // Build a ranked top-N list per period — sorted by that period's revenue,
+    // only including vendors who actually sold something in that window.
+    const rank = (revenueKey, qtyKey, txnsKey) =>
+      rows
+        .filter((r) => r[revenueKey] > 0)
+        .sort((a, b) => b[revenueKey] - a[revenueKey])
+        .slice(0, limit)
+        .map((r) => ({
+          vendorId: r.vendorId,
+          vendorName: r.vendorName,
+          revenue: r[revenueKey],
+          qty: r[qtyKey],
+          transactions: r[txnsKey],
+        }));
+
+    const totalOf = (key) => Number(rows.reduce((sum, r) => sum + r[key], 0).toFixed(2));
+
+    const dayLabel = new Intl.DateTimeFormat('en-AU', { weekday: 'long', day: 'numeric', month: 'long' }).format(localNow);
+    const monthLabel = new Intl.DateTimeFormat('en-AU', { month: 'long', year: 'numeric' }).format(localNow);
+
+    res.json({
+      availableStores,
+      store,
+      generatedAt: { date: todayStr, year, month: month + 1, day },
+      periods: {
+        daily: {
+          label: dayLabel,
+          rangeStart: todayStr,
+          suppliers: rank('dailyRevenue', 'dailyQty', 'dailyTxns'),
+          totalRevenue: totalOf('dailyRevenue'),
+        },
+        monthly: {
+          label: `${monthLabel} (month-to-date)`,
+          rangeStart: monthStartStr,
+          suppliers: rank('monthlyRevenue', 'monthlyQty', 'monthlyTxns'),
+          totalRevenue: totalOf('monthlyRevenue'),
+        },
+        yearly: {
+          label: `${year} (year-to-date)`,
+          rangeStart: yearStartStr,
+          suppliers: rank('yearlyRevenue', 'yearlyQty', 'yearlyTxns'),
+          totalRevenue: totalOf('yearlyRevenue'),
+        },
+      },
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
