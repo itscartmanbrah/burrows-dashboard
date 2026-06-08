@@ -7,7 +7,7 @@
 // has been imported.
 
 import { Fragment, useEffect, useState } from 'react';
-import { TrendingUp, Package, Target, Loader2 } from 'lucide-react';
+import { TrendingUp, Package, Target, Activity, Loader2 } from 'lucide-react';
 import {
   ResponsiveContainer,
   LineChart,
@@ -405,6 +405,255 @@ function SalesPaceCard() {
   );
 }
 
+// Reference-line colors for the trend chart — chosen to roughly mirror
+// EdgePulse's own palette so the chart feels familiar at a glance.
+const TREND_COLORS = {
+  actual: '#2563eb', // solid blue
+  goal: '#dc2626', // dotted red
+  goalDayAdj: '#d97706', // dashed amber
+  lastYear: '#0891b2', // dash-dot cyan
+  projected: '#c026d3', // dotted magenta
+};
+
+const percentChange = new Intl.NumberFormat('en-AU', {
+  style: 'percent',
+  maximumFractionDigits: 1,
+  signDisplay: 'always',
+});
+
+function SalesTrendCard() {
+  // 'all' aggregates every configured store into one combined view — the
+  // most useful overview, so it's the default; switching to a specific
+  // store id shows that store alone.
+  const [storeId, setStoreId] = useState('all');
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    setData(null);
+    setError(null);
+    apiClient
+      .get(`/dashboard/sales-trend?store=${storeId}`)
+      .then((res) => setData(res.data))
+      .catch((err) => setError(err.response?.data?.error || err.message));
+  }, [storeId]);
+
+  const dayTick = (day) => {
+    if (!data) return day;
+    return new Intl.DateTimeFormat('en-AU', { day: 'numeric', month: 'short' }).format(
+      new Date(data.year, data.month - 1, day)
+    );
+  };
+
+  const todayRow = data ? data.chartData[data.today - 1] : null;
+  const aheadOfDayAdjGoal = data && todayRow ? data.actualSoFar >= todayRow.goalDayAdj : false;
+  const projectedAheadOfTarget = data && data.projectedTotal != null ? data.projectedTotal >= data.monthlyTarget : false;
+  const vsLastYearPct =
+    data && data.lastYear.sameWindowTotal > 0
+      ? (data.actualSoFar - data.lastYear.sameWindowTotal) / data.lastYear.sameWindowTotal
+      : null;
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between space-y-0">
+        <div>
+          <CardTitle className="text-base">Month-to-Date Sales Trend</CardTitle>
+          <CardDescription>
+            {data ? `Cumulative sales through ${data.monthLabel} so far` : 'Cumulative sales vs goal, last year and projection'}
+          </CardDescription>
+        </div>
+        <div className="flex items-center gap-3">
+          {data && data.availableStores.length > 0 && (
+            <div className="flex flex-col items-end gap-1">
+              <label htmlFor="sales-trend-store" className="text-[11px] font-medium text-muted-foreground">
+                Store
+              </label>
+              <select
+                id="sales-trend-store"
+                value={storeId}
+                onChange={(e) => setStoreId(e.target.value)}
+                className="h-8 rounded-md border border-input bg-background px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <option value="all">All Stores</option>
+                {data.availableStores.map((s) => (
+                  <option key={s.storeId} value={s.storeId}>
+                    {s.storeName}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <Activity className="size-4" />
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {error && (
+          <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            Error: {error}
+          </p>
+        )}
+        {!error && !data && (
+          <CardState icon={Loader2}>
+            <span className="animate-pulse">Loading…</span>
+          </CardState>
+        )}
+        {data && data.availableStores.length === 0 && (
+          <p className="rounded-md bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
+            {data.note || 'No sales targets are configured.'}
+          </p>
+        )}
+        {data && data.availableStores.length > 0 && (
+          <>
+            <div className="h-72 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={data.chartData} margin={{ top: 8, right: 12, bottom: 0, left: -12 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis
+                    dataKey="day"
+                    tickFormatter={dayTick}
+                    tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }}
+                    axisLine={{ stroke: 'hsl(var(--border))' }}
+                    tickLine={false}
+                    interval="preserveStartEnd"
+                    minTickGap={28}
+                  />
+                  <YAxis
+                    tickFormatter={(v) => compactCurrency.format(v)}
+                    tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }}
+                    axisLine={false}
+                    tickLine={false}
+                    width={64}
+                  />
+                  <Tooltip
+                    formatter={(value, name) => [value == null ? '—' : currency.format(value), name]}
+                    labelFormatter={(day) => dayTick(day)}
+                    contentStyle={{
+                      borderRadius: 8,
+                      fontSize: 12,
+                      border: '1px solid hsl(var(--border))',
+                      background: 'hsl(var(--card))',
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <ReferenceLine
+                    x={data.today}
+                    stroke="hsl(var(--muted-foreground))"
+                    strokeDasharray="4 4"
+                    label={{ value: 'Today', position: 'insideTopRight', fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="actual"
+                    name="Actual"
+                    stroke={TREND_COLORS.actual}
+                    strokeWidth={2.5}
+                    dot={false}
+                    connectNulls={false}
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    type="linear"
+                    dataKey="goal"
+                    name="Goal"
+                    stroke={TREND_COLORS.goal}
+                    strokeWidth={1.5}
+                    strokeDasharray="2 3"
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="goalDayAdj"
+                    name="Goal (day-adjusted)"
+                    stroke={TREND_COLORS.goalDayAdj}
+                    strokeWidth={1.5}
+                    strokeDasharray="6 3"
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="lastYear"
+                    name="Last year"
+                    stroke={TREND_COLORS.lastYear}
+                    strokeWidth={1.5}
+                    strokeDasharray="8 3 2 3"
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="projected"
+                    name="Projected"
+                    stroke={TREND_COLORS.projected}
+                    strokeWidth={1.75}
+                    strokeDasharray="2 3"
+                    dot={false}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border px-3 py-2.5">
+                <p className="text-xs font-medium text-muted-foreground">Actual so far</p>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-lg font-semibold tabular-nums">{currency.format(data.actualSoFar)}</span>
+                  <Badge variant={aheadOfDayAdjGoal ? 'success' : 'secondary'}>
+                    {aheadOfDayAdjGoal ? 'Ahead of pace' : 'Behind pace'}
+                  </Badge>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Day-adjusted goal to date: {currency.format(todayRow?.goalDayAdj ?? 0)}
+                </p>
+              </div>
+
+              <div className="rounded-lg border px-3 py-2.5">
+                <p className="text-xs font-medium text-muted-foreground">Projected month-end</p>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-lg font-semibold tabular-nums">
+                    {data.projectedTotal != null ? currency.format(data.projectedTotal) : '—'}
+                  </span>
+                  {data.projectedTotal != null && (
+                    <Badge variant={projectedAheadOfTarget ? 'success' : 'secondary'}>
+                      {projectedAheadOfTarget ? 'On track' : 'Tracking short'}
+                    </Badge>
+                  )}
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">Monthly target {currency.format(data.monthlyTarget)}</p>
+              </div>
+
+              <div className="rounded-lg border px-3 py-2.5">
+                <p className="text-xs font-medium text-muted-foreground">Same point last year</p>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-lg font-semibold tabular-nums">{currency.format(data.lastYear.sameWindowTotal)}</span>
+                  {vsLastYearPct != null && (
+                    <Badge variant={vsLastYearPct >= 0 ? 'success' : 'secondary'}>{percentChange.format(vsLastYearPct)}</Badge>
+                  )}
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Full {data.monthLabel.split(' ')[0]} last year: {currency.format(data.lastYear.monthTotal)}
+                </p>
+              </div>
+            </div>
+
+            <p className="mt-3 text-xs text-muted-foreground">
+              Goal = monthly target spread evenly across the month. Day-adjusted goal follows{' '}
+              {data.store.storeId === 'all' ? "the combined business's" : `${data.store.storeName}'s`} typical
+              day-of-week pattern from the past 6 months. Projection extrapolates the average daily rate achieved so
+              far across the rest of {data.monthLabel}.
+            </p>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function StorePerformance() {
   return (
     <div className="flex flex-col gap-6">
@@ -419,6 +668,8 @@ export default function StorePerformance() {
       </div>
 
       <SalesPaceCard />
+
+      <SalesTrendCard />
 
       <p className="text-xs text-muted-foreground">
         Note: a fourth widget — current Pandora stock cost — will appear here once the Pandora

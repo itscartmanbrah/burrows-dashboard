@@ -253,4 +253,220 @@ router.get('/sales-pace', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/dashboard/sales-trend?store=<storeId>
+// A month-to-date cumulative sales trend for a single store — modelled on
+// EdgePulse's own "N days" trend chart, which plots actual cumulative sales
+// against several reference lines on the same calendar axis:
+//   • Goal             — the monthly $ target spread evenly across the
+//                        days in the month (a flat straight-line pace)
+//   • Goal (day-adj)   — the same monthly target, but distributed according
+//                        to the store's typical day-of-week sales pattern
+//                        (derived from its last 6 months of actuals) — e.g.
+//                        weekends usually outsell weekdays, so the "expected"
+//                        cumulative curve isn't a straight line in reality
+//   • Last year        — actual cumulative sales for the same calendar days
+//                        of the same month, one year ago (a real comparison)
+//   • Projected        — where this month is on track to land, extrapolated
+//                        forward from the average daily rate achieved so far
+//
+// Always shows the current month, from day 1 up to today, in the stores'
+// own timezone. Only stores with a configured target (see
+// config/salesTargets.js) are selectable.
+router.get('/sales-trend', requireAuth, async (req, res) => {
+  try {
+    const nowResult = await pool.query('SELECT (now() AT TIME ZONE $1) AS local_now', [STORE_TZ]);
+    const localNow = new Date(nowResult.rows[0].local_now);
+    const year = localNow.getFullYear();
+    const month = localNow.getMonth(); // 0-11
+    const today = localNow.getDate(); // 1-31
+
+    const targetsForYear = SALES_TARGETS[year] || {};
+    const storeIds = Object.keys(targetsForYear).map(Number);
+
+    if (storeIds.length === 0) {
+      return res.json({
+        availableStores: [],
+        note: `No sales targets configured for ${year} — add an entry to backend/config/salesTargets.js.`,
+      });
+    }
+
+    const storesResult = await pool.query(
+      `SELECT storeid AS "storeId", shortname AS "storeName", longname AS "storeLongName"
+       FROM Stores WHERE storeid = ANY($1::int[]) ORDER BY storeid`,
+      [storeIds]
+    );
+    const availableStores = storesResult.rows;
+
+    // ?store=<id> shows a single store; ?store=all (or anything else,
+    // including a missing param) shows every configured store combined —
+    // that's the most useful overview, so it's the default.
+    const requestedStoreId = parseInt(req.query.store, 10);
+    const singleStoreId = storeIds.includes(requestedStoreId) ? requestedStoreId : null;
+    const filterStoreIds = singleStoreId != null ? [singleStoreId] : storeIds;
+
+    const store = singleStoreId != null
+      ? availableStores.find((s) => s.storeId === singleStoreId)
+      : {
+          storeId: 'all',
+          storeName: 'All Stores',
+          storeLongName: `All stores combined (${availableStores.map((s) => s.storeName).join(' + ')})`,
+        };
+
+    const monthlyTarget = singleStoreId != null
+      ? targetsForYear[singleStoreId].monthly[month]
+      : storeIds.reduce((sum, id) => sum + targetsForYear[id].monthly[month], 0);
+    const totalDays = daysInMonth(year, month);
+
+    // Date bounds as plain YYYY-MM-DD strings — saledate is a naive local
+    // timestamp using the same "wall clock" convention, so direct
+    // date-literal comparisons are correct with no timezone conversion.
+    const pad = (n) => String(n).padStart(2, '0');
+    const ymd = (y, m, d) => `${y}-${pad(m + 1)}-${pad(d)}`; // m is 0-11
+
+    const monthStartStr = ymd(year, month, 1);
+    const nextMonth = new Date(year, month + 1, 1);
+    const monthEndStr = ymd(nextMonth.getFullYear(), nextMonth.getMonth(), 1);
+
+    const lastYearDays = daysInMonth(year - 1, month);
+    const lastYearStartStr = ymd(year - 1, month, 1);
+    const lastYearNextMonth = new Date(year - 1, month + 1, 1);
+    const lastYearEndStr = ymd(lastYearNextMonth.getFullYear(), lastYearNextMonth.getMonth(), 1);
+
+    // 6-month lookback window immediately preceding this month — used to
+    // learn the store's typical day-of-week sales pattern. Deliberately
+    // excludes the current (partial) month so it doesn't skew the pattern.
+    const lookbackStart = new Date(year, month - 6, 1);
+    const lookbackStartStr = ymd(lookbackStart.getFullYear(), lookbackStart.getMonth(), 1);
+
+    const TENDER_SUM = `COALESCE(SUM(CASE WHEN sl.slkey1 = 'TENDER' THEN sl.unitsellprice * sl.quantity ELSE 0 END), 0)`;
+
+    // filterStoreIds is either a single store's id or every configured
+    // store's id — `storeid = ANY(...)` covers both the single-store and
+    // "all stores combined" cases with the same query shape.
+    const [actualResult, lastYearResult, dowResult] = await Promise.all([
+      // Daily TENDER totals for this month-to-date.
+      pool.query(
+        `
+        SELECT EXTRACT(DAY FROM s.saledate)::int AS day, ${TENDER_SUM} AS total
+        FROM EP_Sales s
+        JOIN EP_SaleLines sl ON sl.storeid = s.storeid AND sl.saleid = s.saleid
+        WHERE s.storeid = ANY($1::int[]) AND s.voided = false
+          AND s.saledate >= $2::date AND s.saledate < $3::date
+        GROUP BY day
+        `,
+        [filterStoreIds, monthStartStr, monthEndStr]
+      ),
+      // Daily TENDER totals for the same month, one year ago.
+      pool.query(
+        `
+        SELECT EXTRACT(DAY FROM s.saledate)::int AS day, ${TENDER_SUM} AS total
+        FROM EP_Sales s
+        JOIN EP_SaleLines sl ON sl.storeid = s.storeid AND sl.saleid = s.saleid
+        WHERE s.storeid = ANY($1::int[]) AND s.voided = false
+          AND s.saledate >= $2::date AND s.saledate < $3::date
+        GROUP BY day
+        `,
+        [filterStoreIds, lastYearStartStr, lastYearEndStr]
+      ),
+      // Average $/day for each day-of-week (0=Sun..6=Sat) over the 6 months
+      // prior to this one — the basis for the "day-adjusted" goal curve.
+      pool.query(
+        `
+        SELECT EXTRACT(DOW FROM s.saledate)::int AS dow,
+               ${TENDER_SUM} AS total,
+               COUNT(DISTINCT date_trunc('day', s.saledate)) AS "dayCount"
+        FROM EP_Sales s
+        JOIN EP_SaleLines sl ON sl.storeid = s.storeid AND sl.saleid = s.saleid
+        WHERE s.storeid = ANY($1::int[]) AND s.voided = false
+          AND s.saledate >= $2::date AND s.saledate < $3::date
+        GROUP BY dow
+        `,
+        [filterStoreIds, lookbackStartStr, monthStartStr]
+      ),
+    ]);
+
+    const dailyActual = {};
+    for (const row of actualResult.rows) dailyActual[row.day] = Number(row.total);
+    const dailyLastYear = {};
+    for (const row of lastYearResult.rows) dailyLastYear[row.day] = Number(row.total);
+
+    // Average $/day per day-of-week, with a fallback to an even split (weight
+    // 1 for every day) if there's not yet enough sales history to learn from.
+    const dowAvg = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+    for (const row of dowResult.rows) {
+      const count = Number(row.dayCount);
+      dowAvg[row.dow] = count > 0 ? Number(row.total) / count : 0;
+    }
+    const dowAvgSum = Object.values(dowAvg).reduce((a, b) => a + b, 0);
+
+    const dayWeights = [];
+    for (let d = 1; d <= totalDays; d++) {
+      const dow = new Date(year, month, d).getDay();
+      dayWeights.push(dowAvgSum > 0 ? dowAvg[dow] : 1);
+    }
+    const totalWeight = dayWeights.reduce((a, b) => a + b, 0);
+
+    let runningActual = 0;
+    let runningLastYear = 0;
+    let runningWeight = 0;
+    const chartData = [];
+    for (let d = 1; d <= totalDays; d++) {
+      runningActual += dailyActual[d] || 0;
+      if (d <= lastYearDays) runningLastYear += dailyLastYear[d] || 0;
+      runningWeight += dayWeights[d - 1];
+
+      const goal = monthlyTarget * (d / totalDays);
+      const goalDayAdj = totalWeight > 0 ? monthlyTarget * (runningWeight / totalWeight) : goal;
+
+      chartData.push({
+        day: d,
+        actual: d <= today ? Number(runningActual.toFixed(2)) : null,
+        goal: Number(goal.toFixed(2)),
+        goalDayAdj: Number(goalDayAdj.toFixed(2)),
+        lastYear: Number(runningLastYear.toFixed(2)),
+        projected: null, // filled in below, from "today" onward
+      });
+    }
+
+    // Project the rest of the month forward at the average daily rate
+    // achieved so far (actualSoFar ÷ today × remaining days). Drawn only
+    // from "today" onward — before that, the actual line covers it, and
+    // starting it at "today" keeps the two lines visually joined.
+    const actualSoFar = chartData[today - 1] ? chartData[today - 1].actual : 0;
+    let projectedTotal = null;
+    if (today > 0) {
+      projectedTotal = Number((actualSoFar * (totalDays / today)).toFixed(2));
+      for (let d = today; d <= totalDays; d++) {
+        chartData[d - 1].projected = Number((actualSoFar * (d / today)).toFixed(2));
+      }
+    }
+
+    const monthLabel = new Intl.DateTimeFormat('en-AU', { month: 'long', year: 'numeric' }).format(
+      new Date(year, month, 1)
+    );
+
+    res.json({
+      availableStores,
+      store,
+      year,
+      month: month + 1, // 1-12, for display
+      monthLabel,
+      daysInMonth: totalDays,
+      today,
+      monthlyTarget,
+      actualSoFar,
+      projectedTotal,
+      lastYear: {
+        sameWindowTotal: chartData[Math.min(today, lastYearDays) - 1]
+          ? chartData[Math.min(today, lastYearDays) - 1].lastYear
+          : 0,
+        monthTotal: Number(runningLastYear.toFixed(2)),
+      },
+      chartData,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
