@@ -1,4 +1,5 @@
-// Pandora Ordering — Phase 2 (formerly "Pandora Reference").
+// Pandora Functions (formerly "Pandora Ordering", and before that "Pandora
+// Reference") — the single home for every Pandora-related tool staff need.
 //
 // Manages a standalone reference copy of Pandora's "build to level" /
 // discontinued master list, imported from a CSV the supplier periodically
@@ -6,14 +7,18 @@
 // NO relationship to burrows_jewellers — it's purely a reference staff can
 // compare our actual inventory against (matched up later by Design Number).
 //
-// The page's main feature — and the reason it's called "Pandora Ordering" —
-// is the Reorder List: a live comparison of the master list's build-to-levels
-// against our actual on-hand stock, showing exactly what to order today, with
-// a one-click CSV export. The summary cards double as quick filters into a
-// simple master-list view, and the CSV "update" control is tucked away since
-// refreshing the list is an occasional admin task, not a day-to-day workflow.
-// (The placeholder "Pandora Ordering" nav entry that used to sit alongside
-// this page has been removed — this page now covers that ground itself.)
+// The page's headline feature is the Reorder List: a live comparison of the
+// master list's build-to-levels against our actual on-hand stock, showing
+// exactly what to order today, with a one-click CSV export. The summary
+// cards double as quick filters into a simple master-list view. Tucked into
+// a single "Update list" control (with Update / Mark Discontinued tabs) are
+// the two ways staff keep the master list current: refreshing it from
+// Pandora's full CSV, or uploading a simple list of Design Numbers to flag
+// designs as discontinued (any design not already on file gets added too,
+// purely so we retain a record of it).
+// (The placeholder "Pandora Ordering" and "Pandora Discontinued" nav entries
+// that used to sit alongside this page have both been removed — every Pandora
+// tool now lives here in one centralised tab.)
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -42,6 +47,7 @@ import {
 } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 const number = new Intl.NumberFormat('en-AU');
 const currency = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' });
@@ -274,8 +280,23 @@ function MasterListPanel({ filter, onClose }) {
 // releases new designs or changes build-to-levels / discontinued status.
 // This is an occasional admin task, not a day-to-day workflow, so it's
 // tucked into a popover off a small button rather than a prominent card.
-function UpdateListControl({ onUpdated }) {
-  const [open, setOpen] = useState(false);
+// Shared file-picker + submit button + result/last-run footer used by both
+// modes of the Update List control below — only the copy, endpoint, and
+// result wording differ between Update and Mark Discontinued.
+function ImportPane({
+  inputId,
+  helpText,
+  endpoint,
+  importKind,
+  submitLabel,
+  busyLabel,
+  submitIcon: SubmitIcon,
+  submitVariant,
+  lastRunLabel,
+  noRunsLabel,
+  renderResult,
+  onUpdated,
+}) {
   const fileInputRef = useRef(null);
   const [fileName, setFileName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -285,10 +306,10 @@ function UpdateListControl({ onUpdated }) {
 
   const refreshLastImport = useCallback(() => {
     apiClient
-      .get('/pandora/imports?limit=1')
+      .get(`/pandora/imports?limit=1&kind=${importKind}`)
       .then((res) => setLastImport(res.data.imports?.[0] || null))
       .catch(() => {});
-  }, []);
+  }, [importKind]);
 
   useEffect(() => {
     refreshLastImport();
@@ -301,7 +322,7 @@ function UpdateListControl({ onUpdated }) {
     setError(null);
   }
 
-  async function handleUpdate() {
+  async function handleSubmit() {
     const file = fileInputRef.current?.files?.[0];
     if (!file) {
       setError('Choose a CSV file first.');
@@ -315,7 +336,7 @@ function UpdateListControl({ onUpdated }) {
     setError(null);
     setResult(null);
     try {
-      const res = await apiClient.post('/pandora/import', formData, {
+      const res = await apiClient.post(endpoint, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setResult(res.data.import);
@@ -329,6 +350,74 @@ function UpdateListControl({ onUpdated }) {
   }
 
   return (
+    <div className="pt-3">
+      <p className="text-xs text-muted-foreground">{helpText}</p>
+
+      <div className="mt-3 flex flex-col gap-1.5">
+        <Label htmlFor={inputId}>CSV file</Label>
+        <input
+          ref={fileInputRef}
+          id={inputId}
+          type="file"
+          accept=".csv,text/csv"
+          onChange={handleFileChange}
+          className="block text-sm text-muted-foreground file:mr-3 file:rounded-md file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-secondary-foreground hover:file:bg-secondary/80"
+        />
+      </div>
+
+      <Button
+        onClick={handleSubmit}
+        disabled={busy || !fileName}
+        size="sm"
+        variant={submitVariant}
+        className="mt-3 w-full"
+      >
+        {busy ? (
+          <>
+            <Loader2 className="size-4 animate-spin" /> {busyLabel}
+          </>
+        ) : (
+          <>
+            <SubmitIcon className="size-4" /> {submitLabel}
+          </>
+        )}
+      </Button>
+
+      {error && (
+        <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</p>
+      )}
+
+      {result && (
+        <div className="mt-3 flex items-start gap-2 rounded-md bg-primary/10 px-3 py-2 text-xs text-primary">
+          <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" />
+          <p>{renderResult(result)}</p>
+        </div>
+      )}
+
+      <Separator className="my-3" />
+
+      <p className="text-xs text-muted-foreground">
+        {lastImport ? (
+          <>
+            {lastRunLabel} <strong>{lastImport.filename}</strong> on{' '}
+            {dateTime.format(new Date(lastImport.importedAt))}
+          </>
+        ) : (
+          noRunsLabel
+        )}
+      </p>
+    </div>
+  );
+}
+
+// Combined "Update list" control — a single popover with two tabs/modes:
+// refreshing the master list from Pandora's full CSV, or uploading a simple
+// Design Number list to mark designs discontinued. Keeping both in one
+// control centralises every Pandora master-list maintenance task in one place.
+function UpdateListControl({ onUpdated }) {
+  const [open, setOpen] = useState(false);
+
+  return (
     <div className="relative">
       <Button variant="outline" size="sm" onClick={() => setOpen((o) => !o)}>
         <RefreshCw className="size-4" /> Update list
@@ -338,11 +427,10 @@ function UpdateListControl({ onUpdated }) {
         <div className="absolute left-0 top-full z-10 mt-2 w-80 rounded-lg border bg-card p-4 shadow-lg">
           <div className="mb-3 flex items-start justify-between gap-2">
             <div>
-              <p className="text-sm font-medium">Update Master List</p>
+              <p className="text-sm font-medium">Master List Tools</p>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                Upload a refreshed CSV when Pandora releases new designs or changes
-                build-to-levels / discontinued status — matched and merged by Design
-                Number, so only what's new or different gets touched.
+                Refresh the list from Pandora's CSV, or mark designs as
+                discontinued — both matched and merged by Design Number.
               </p>
             </div>
             <Button variant="ghost" size="icon" className="size-7 shrink-0" onClick={() => setOpen(false)}>
@@ -350,58 +438,59 @@ function UpdateListControl({ onUpdated }) {
             </Button>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="pandora-csv">CSV file</Label>
-            <input
-              ref={fileInputRef}
-              id="pandora-csv"
-              type="file"
-              accept=".csv,text/csv"
-              onChange={handleFileChange}
-              className="block text-sm text-muted-foreground file:mr-3 file:rounded-md file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-secondary-foreground hover:file:bg-secondary/80"
-            />
-          </div>
+          <Tabs defaultValue="update">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="update">Update</TabsTrigger>
+              <TabsTrigger value="discontinue">Mark Discontinued</TabsTrigger>
+            </TabsList>
 
-          <Button onClick={handleUpdate} disabled={busy || !fileName} size="sm" className="mt-3 w-full">
-            {busy ? (
-              <>
-                <Loader2 className="size-4 animate-spin" /> Updating…
-              </>
-            ) : (
-              <>
-                <Upload className="size-4" /> Update list
-              </>
-            )}
-          </Button>
+            <TabsContent value="update">
+              <ImportPane
+                inputId="pandora-update-csv"
+                helpText={`Upload a refreshed CSV when Pandora releases new designs or changes build-to-levels / status — matched and merged by Design Number, so only what's new or different gets touched.`}
+                endpoint="/pandora/import"
+                importKind="update"
+                submitLabel="Update list"
+                busyLabel="Updating…"
+                submitIcon={Upload}
+                lastRunLabel="Last updated:"
+                noRunsLabel="No updates recorded yet."
+                onUpdated={onUpdated}
+                renderResult={(result) => (
+                  <>
+                    {number.format(result.rowsTotal)} rows checked —{' '}
+                    <strong>{number.format(result.rowsInserted)}</strong> new,{' '}
+                    <strong>{number.format(result.rowsUpdated)}</strong> updated,{' '}
+                    <strong>{number.format(result.rowsUnchanged)}</strong> unchanged.
+                  </>
+                )}
+              />
+            </TabsContent>
 
-          {error && (
-            <p className="mt-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</p>
-          )}
-
-          {result && (
-            <div className="mt-3 flex items-start gap-2 rounded-md bg-primary/10 px-3 py-2 text-xs text-primary">
-              <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" />
-              <p>
-                {number.format(result.rowsTotal)} rows checked —{' '}
-                <strong>{number.format(result.rowsInserted)}</strong> new,{' '}
-                <strong>{number.format(result.rowsUpdated)}</strong> updated,{' '}
-                <strong>{number.format(result.rowsUnchanged)}</strong> unchanged.
-              </p>
-            </div>
-          )}
-
-          <Separator className="my-3" />
-
-          <p className="text-xs text-muted-foreground">
-            {lastImport ? (
-              <>
-                Last updated: <strong>{lastImport.filename}</strong> on{' '}
-                {dateTime.format(new Date(lastImport.importedAt))}
-              </>
-            ) : (
-              'No updates recorded yet.'
-            )}
-          </p>
+            <TabsContent value="discontinue">
+              <ImportPane
+                inputId="pandora-discontinue-csv"
+                helpText={`Upload a simple list of Design Numbers — one per row, or a Design# column — to mark those designs discontinued. Anything not already on the master list gets added too (build-to-level 0, status discontinued), so we keep a record of it even though we'll never reorder it.`}
+                endpoint="/pandora/discontinue"
+                importKind="discontinue"
+                submitLabel="Mark discontinued"
+                busyLabel="Marking…"
+                submitIcon={Ban}
+                submitVariant="destructive"
+                lastRunLabel="Last run:"
+                noRunsLabel="No discontinue uploads recorded yet."
+                onUpdated={onUpdated}
+                renderResult={(result) => (
+                  <>
+                    {number.format(result.rowsTotal)} design numbers checked —{' '}
+                    <strong>{number.format(result.rowsInserted)}</strong> added as new records,{' '}
+                    <strong>{number.format(result.rowsUpdated)}</strong> newly marked discontinued,{' '}
+                    <strong>{number.format(result.rowsUnchanged)}</strong> already discontinued.
+                  </>
+                )}
+              />
+            </TabsContent>
+          </Tabs>
         </div>
       )}
     </div>
@@ -614,7 +703,7 @@ function ReorderCard({ summary }) {
   );
 }
 
-export default function PandoraOrdering() {
+export default function PandoraFunctions() {
   const [summary, setSummary] = useState(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
   // null = master list panel closed; '' | 'active' | 'discontinued' = open & filtered
@@ -642,7 +731,7 @@ export default function PandoraOrdering() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Pandora Ordering</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">Pandora Functions</h2>
           <p className="text-sm text-muted-foreground">
             Pandora's build-to-level / discontinued master list, matched against our actual
             inventory by Design Number. Lives in its own database, separate from the main store data.

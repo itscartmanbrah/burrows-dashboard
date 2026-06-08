@@ -4,7 +4,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import StorePerformance from './pages/StorePerformance';
-import PandoraOrdering from './pages/PandoraOrdering';
+import PandoraFunctions from './pages/PandoraFunctions';
 import Placeholder from './pages/Placeholder';
 
 export default function App() {
@@ -22,8 +22,7 @@ export default function App() {
         >
           <Route index element={<StorePerformance />} />
           <Route path="debt-reduction" element={<Placeholder title="Showcase Debt Reduction" />} />
-          <Route path="pandora-ordering" element={<PandoraOrdering />} />
-          <Route path="pandora-discontinued" element={<Placeholder title="Pandora Discontinued Products" />} />
+          <Route path="pandora-functions" element={<PandoraFunctions />} />
         </Route>
         <Route path="*" element={<Placeholder title="Page not found" />} />
       </Routes>

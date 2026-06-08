@@ -1,6 +1,8 @@
-// Pandora Ordering endpoints (frontend page: "Pandora Ordering", formerly
-// "Pandora Reference") — manages a standalone reference copy of Pandora's
-// "build to level" / discontinued master list.
+// Pandora Functions endpoints (frontend page: "Pandora Functions", formerly
+// "Pandora Ordering"/"Pandora Reference") — manages a standalone reference
+// copy of Pandora's "build to level" / discontinued master list, plus the
+// tools staff use to keep it current (refresh from a supplier CSV, mark
+// designs discontinued, and generate reorder sheets).
 //
 // IMPORTANT: this data lives in its own database (`pandora_reference`,
 // see db/pandoraPool.js) and has NO relationship to burrows_jewellers.
@@ -67,6 +69,73 @@ function normalizeRow(row) {
 
   return { designNum, department, description, buildToLevel, status };
 }
+
+// Column-label aliases recognised as "this is the Design Number column"
+// when parsing a discontinue-list CSV.
+const DESIGN_HEADER_NAMES = ['design#', 'design #', 'designnum', 'design number', 'design'];
+
+// Parses a "mark discontinued" upload, which is intentionally a much simpler
+// format than the full master-list CSV: just a list of Design Numbers, either
+// one per row with no header at all, or as a Design# column (optionally with
+// Department/Description columns alongside it, though in practice staff will
+// usually just paste in the bare numbers).
+//
+// We can't blindly use `columns: true` here because a headerless file would
+// have its first design number swallowed as the header row — so we parse as
+// raw rows first and decide whether row 0 looks like a header.
+function parseDesignNumberList(buffer) {
+  const rows = parse(buffer, {
+    skip_empty_lines: true,
+    trim: true,
+    bom: true,
+  });
+
+  if (rows.length === 0) return [];
+
+  const firstCell = (rows[0][0] || '').replace(/^﻿/, '').trim().toLowerCase();
+  const looksLikeHeader = DESIGN_HEADER_NAMES.includes(firstCell)
+    || /\b(department|description|status)\b/i.test(rows[0].join(' '));
+
+  let designIdx = 0;
+  let departmentIdx = -1;
+  let descriptionIdx = -1;
+  let dataRows = rows;
+
+  if (looksLikeHeader) {
+    const header = rows[0].map((h) => (h || '').replace(/^﻿/, '').trim().toLowerCase());
+    designIdx = header.findIndex((h) => DESIGN_HEADER_NAMES.includes(h));
+    if (designIdx === -1) designIdx = 0;
+    departmentIdx = header.findIndex((h) => h === 'department');
+    descriptionIdx = header.findIndex((h) => h === 'description');
+    dataRows = rows.slice(1);
+  }
+
+  return dataRows
+    .map((cells) => ({
+      designNum: (cells[designIdx] || '').trim(),
+      department: departmentIdx >= 0 ? ((cells[departmentIdx] || '').trim() || null) : null,
+      description: descriptionIdx >= 0
+        ? ((cells[descriptionIdx] || '').replace(/\s+/g, ' ').trim() || null)
+        : null,
+    }))
+    .filter((r) => r.designNum);
+}
+
+// Marks a design as discontinued. If it already exists in the master list,
+// only its status (and updated_at) changes — its department/description/
+// build-to-level are left exactly as they are. If it doesn't exist yet, it's
+// inserted as a discontinued record with build_to_level = 0 (we'll never
+// reorder it, but it's still useful to retain the design number for history)
+// and whatever department/description the file happened to provide.
+const DISCONTINUE_UPSERT_SQL = `
+  INSERT INTO pandora_items (design_num, department, description, build_to_level, status, imported_at, updated_at)
+  VALUES ($1, $2, $3, 0, 'discontinued', now(), now())
+  ON CONFLICT (design_num) DO UPDATE
+  SET status     = 'discontinued',
+      updated_at = now()
+  WHERE pandora_items.status IS DISTINCT FROM 'discontinued'
+  RETURNING (xmax = 0) AS inserted;
+`;
 
 const UPSERT_SQL = `
   INSERT INTO pandora_items (design_num, department, description, build_to_level, status, imported_at, updated_at)
@@ -139,11 +208,11 @@ router.post('/import', requireAuth, upload.single('file'), async (req, res) => {
     }
 
     const importRecord = await client.query(
-      `INSERT INTO pandora_imports (filename, rows_total, rows_inserted, rows_updated, rows_unchanged)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO pandora_imports (filename, rows_total, rows_inserted, rows_updated, rows_unchanged, kind)
+       VALUES ($1, $2, $3, $4, $5, 'update')
        RETURNING id, filename, rows_total AS "rowsTotal", rows_inserted AS "rowsInserted",
                  rows_updated AS "rowsUpdated", rows_unchanged AS "rowsUnchanged",
-                 imported_at AS "importedAt"`,
+                 imported_at AS "importedAt", kind`,
       [req.file.originalname, records.length, inserted, updated, unchanged]
     );
 
@@ -161,20 +230,101 @@ router.post('/import', requireAuth, upload.single('file'), async (req, res) => {
   }
 });
 
-// GET /api/pandora/imports?limit=10
-// Recent import history (so staff can see when the list was last refreshed).
+// POST /api/pandora/discontinue
+// Accepts a CSV file (multipart/form-data, field name "file") containing a
+// simple list of Design Numbers — one per row, or with a Design# column —
+// and marks every matching item in the master list as discontinued. Any
+// design number that doesn't already exist is inserted as a discontinued
+// record (build-to-level 0) so we keep a record of it for reference, even
+// though it'll never appear in a reorder. Logs a 'discontinue'-kind row in
+// pandora_imports so the history view can tell the two apart.
+router.post('/discontinue', requireAuth, upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded — expected a CSV under field "file".' });
+  }
+
+  let rows;
+  try {
+    rows = parseDesignNumberList(req.file.buffer);
+  } catch (err) {
+    return res.status(400).json({ error: `Could not parse CSV: ${err.message}` });
+  }
+
+  if (rows.length === 0) {
+    return res.status(400).json({ error: 'No design numbers found in that file.' });
+  }
+
+  const client = await pool.connect();
+  let inserted = 0;
+  let updated = 0;
+  let unchanged = 0;
+
+  try {
+    await client.query('BEGIN');
+
+    for (const row of rows) {
+      const result = await client.query(DISCONTINUE_UPSERT_SQL, [
+        row.designNum,
+        row.department,
+        row.description,
+      ]);
+
+      if (result.rowCount === 0) {
+        unchanged += 1;
+      } else if (result.rows[0].inserted) {
+        inserted += 1;
+      } else {
+        updated += 1;
+      }
+    }
+
+    const importRecord = await client.query(
+      `INSERT INTO pandora_imports (filename, rows_total, rows_inserted, rows_updated, rows_unchanged, kind)
+       VALUES ($1, $2, $3, $4, $5, 'discontinue')
+       RETURNING id, filename, rows_total AS "rowsTotal", rows_inserted AS "rowsInserted",
+                 rows_updated AS "rowsUpdated", rows_unchanged AS "rowsUnchanged",
+                 imported_at AS "importedAt", kind`,
+      [req.file.originalname, rows.length, inserted, updated, unchanged]
+    );
+
+    await client.query('COMMIT');
+
+    res.json({ import: importRecord.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// GET /api/pandora/imports?limit=10&kind=update|discontinue
+// Recent import history (so staff can see when the list was last refreshed,
+// or last had designs marked discontinued). `kind` is optional — omit it to
+// see both kinds interleaved.
 router.get('/imports', requireAuth, async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
+  const conditions = [];
+  const params = [];
+
+  if (req.query.kind === 'update' || req.query.kind === 'discontinue') {
+    params.push(req.query.kind);
+    conditions.push(`kind = $${params.length}`);
+  }
+
+  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  params.push(limit);
 
   try {
     const result = await pool.query(
       `SELECT id, filename, rows_total AS "rowsTotal", rows_inserted AS "rowsInserted",
               rows_updated AS "rowsUpdated", rows_unchanged AS "rowsUnchanged",
-              imported_at AS "importedAt"
+              imported_at AS "importedAt", kind
        FROM pandora_imports
+       ${whereClause}
        ORDER BY imported_at DESC
-       LIMIT $1`,
-      [limit]
+       LIMIT $${params.length}`,
+      params
     );
     res.json({ imports: result.rows });
   } catch (err) {
