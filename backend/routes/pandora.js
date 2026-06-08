@@ -10,14 +10,28 @@
 // The source of truth is a CSV that Pandora periodically supplies
 // (columns: Design#, Department, Description, Minimum Quantity, Status —
 // where "Minimum Quantity" is the build-to-level and a "Discontinued"
-// Status flags a design as discontinued). Re-importing a refreshed CSV
-// upserts rows: new design numbers are inserted, changed ones are
-// updated, and unchanged ones are left untouched.
+// Status flags a design as discontinued). The master list is a living
+// document — staff "update" it (via the small Update-list control on the
+// page) whenever Pandora releases new designs or changes levels/status,
+// they don't re-import it from scratch. Upserting by Design Number means
+// new rows are inserted, changed ones updated, and unchanged ones left
+// untouched, so refreshing the list is always safe to run.
+//
+// The other half of this file is the Reorder comparison (see
+// getReorderComparison below): it matches the master list's build-to-levels
+// against our actual on-hand stock from burrows_jewellers — entirely in
+// application code, never via a SQL join — to answer "what should we order
+// today," with a one-click CSV export in supplier order-sheet format.
 
 const express = require('express');
 const multer = require('multer');
 const { parse } = require('csv-parse/sync');
 const pool = require('../db/pandoraPool');
+// Separate pool for burrows_jewellers — used ONLY to read actual on-hand
+// quantities/costs for comparison against the Pandora reference list.
+// This is a read-only lookup in application code, never a SQL join across
+// the two databases (see the standalone-DB note at the top of this file).
+const burrowsPool = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -255,6 +269,128 @@ router.get('/items', requireAuth, async (req, res) => {
       total: countResult.rows[0].total,
       totalPages: Math.max(Math.ceil(countResult.rows[0].total / pageSize), 1),
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Escape a value for inclusion in a CSV cell (quotes when it contains a
+// comma, quote, or newline; doubles any embedded quotes).
+function csvField(value) {
+  const str = value === null || value === undefined ? '' : String(value);
+  if (/[",\r\n]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+// Compares the active master list (where a build-to-level is set) against
+// our actual on-hand stock — matched by Design Number — and returns every
+// design that's currently short of its build-to-level, with the quantity
+// that should be ordered to bring it back up to level.
+//
+// IMPORTANT: this match happens here, in application code, by looking up
+// Design Numbers across two independent query results. It is NOT a SQL
+// join — pandora_reference and burrows_jewellers remain fully separate
+// databases with no cross-database relationships (per the standalone-DB
+// design — see the file header and HOWTO.md §9).
+//
+// Matching key: pandora_items.design_num <-> Items.realdesignnum
+// (confirmed against live data — Items.designnum lacks the dash Pandora
+// uses, e.g. "549588C002" vs "549588C00-2", but realdesignnum matches
+// the master list's Design# format exactly).
+async function getReorderComparison({ department } = {}) {
+  const params = ['active'];
+  let where = 'WHERE status = $1 AND build_to_level > 0';
+  if (department) {
+    params.push(department);
+    where += ` AND department = $${params.length}`;
+  }
+
+  const masterList = await pool.query(
+    `SELECT design_num AS "designNum", department, description, build_to_level AS "buildToLevel"
+     FROM pandora_items
+     ${where}
+     ORDER BY department, design_num`,
+    params
+  );
+
+  if (masterList.rows.length === 0) return [];
+
+  const designNums = masterList.rows.map((r) => r.designNum);
+  const inventory = await burrowsPool.query(
+    `SELECT realdesignnum                    AS "designNum",
+            SUM(totalavailqoh)::numeric      AS "onHand",
+            ROUND(AVG(cost), 2)              AS "cost"
+     FROM Items
+     WHERE vendorid = 'PANDO' AND realdesignnum = ANY($1::text[])
+     GROUP BY realdesignnum`,
+    [designNums]
+  );
+  const stockByDesign = new Map(inventory.rows.map((r) => [r.designNum, r]));
+
+  return masterList.rows
+    .map((item) => {
+      const stock = stockByDesign.get(item.designNum);
+      const onHand = stock ? Number(stock.onHand) : 0;
+      const cost = stock && stock.cost !== null ? Number(stock.cost) : null;
+      const reorderQty = Math.max(item.buildToLevel - onHand, 0);
+      return { ...item, onHand, cost, reorderQty };
+    })
+    .filter((item) => item.reorderQty > 0);
+}
+
+// GET /api/pandora/reorder?department=&page=1&pageSize=25
+// Paginated "what to order today" comparison — active designs currently
+// below their Pandora build-to-level, with the quantity needed to top up.
+router.get('/reorder', requireAuth, async (req, res) => {
+  const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+  const pageSize = Math.min(Math.max(parseInt(req.query.pageSize, 10) || 25, 1), 200);
+
+  try {
+    const items = await getReorderComparison({ department: req.query.department || null });
+    const total = items.length;
+    const totalPages = Math.max(Math.ceil(total / pageSize), 1);
+    const offset = (page - 1) * pageSize;
+
+    res.json({
+      items: items.slice(offset, offset + pageSize),
+      page,
+      pageSize,
+      total,
+      totalPages,
+      totalReorderQty: items.reduce((sum, item) => sum + item.reorderQty, 0),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/pandora/reorder/export?department=
+// Generates a supplier-ready order CSV (Item, Description, Quantity, Cost)
+// for every design currently due for reorder — honouring the same
+// department filter as the on-screen list, but covering ALL matching rows
+// (not just the current page).
+router.get('/reorder/export', requireAuth, async (req, res) => {
+  try {
+    const items = await getReorderComparison({ department: req.query.department || null });
+
+    const lines = [
+      ['Item', 'Description', 'Quantity', 'Cost'].join(','),
+      ...items.map((item) =>
+        [
+          csvField(item.designNum),
+          csvField(item.description),
+          item.reorderQty,
+          item.cost !== null ? item.cost.toFixed(2) : '',
+        ].join(',')
+      ),
+    ];
+
+    const filename = `pandora-reorder-${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(lines.join('\r\n'));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
