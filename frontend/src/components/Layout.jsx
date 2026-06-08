@@ -2,7 +2,7 @@
 // New tools/pages get added to the `navItems` list as they're built.
 
 import { NavLink, Outlet } from 'react-router-dom';
-import { Gem, LayoutDashboard, Banknote, PackageSearch, ClipboardList, PackageX, LogOut } from 'lucide-react';
+import { Gem, LayoutDashboard, Banknote, PackageSearch, PackageX, LogOut } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -12,8 +12,7 @@ import { Separator } from '@/components/ui/separator';
 const navItems = [
   { to: '/', label: 'Store Performance', end: true, icon: LayoutDashboard },
   { to: '/debt-reduction', label: 'Showcase Debt Reduction', icon: Banknote },
-  { to: '/pandora-reference', label: 'Pandora Reference', icon: PackageSearch },
-  { to: '/pandora-ordering', label: 'Pandora Ordering', icon: ClipboardList },
+  { to: '/pandora-ordering', label: 'Pandora Ordering', icon: PackageSearch },
   { to: '/pandora-discontinued', label: 'Pandora Discontinued', icon: PackageX },
 ];
 

@@ -1,4 +1,4 @@
-// Pandora Reference — Phase 2.
+// Pandora Ordering — Phase 2 (formerly "Pandora Reference").
 //
 // Manages a standalone reference copy of Pandora's "build to level" /
 // discontinued master list, imported from a CSV the supplier periodically
@@ -6,12 +6,14 @@
 // NO relationship to burrows_jewellers — it's purely a reference staff can
 // compare our actual inventory against (matched up later by Design Number).
 //
-// The page's main feature is the Reorder List — a live comparison of the
-// master list's build-to-levels against our actual on-hand stock, showing
-// exactly what to order today, with a one-click CSV export. The summary
-// cards double as quick filters into a simple master-list view, and the
-// CSV "update" control is tucked away since refreshing the list is an
-// occasional admin task, not a day-to-day workflow.
+// The page's main feature — and the reason it's called "Pandora Ordering" —
+// is the Reorder List: a live comparison of the master list's build-to-levels
+// against our actual on-hand stock, showing exactly what to order today, with
+// a one-click CSV export. The summary cards double as quick filters into a
+// simple master-list view, and the CSV "update" control is tucked away since
+// refreshing the list is an occasional admin task, not a day-to-day workflow.
+// (The placeholder "Pandora Ordering" nav entry that used to sit alongside
+// this page has been removed — this page now covers that ground itself.)
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -612,7 +614,7 @@ function ReorderCard({ summary }) {
   );
 }
 
-export default function PandoraReference() {
+export default function PandoraOrdering() {
   const [summary, setSummary] = useState(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
   // null = master list panel closed; '' | 'active' | 'discontinued' = open & filtered
@@ -640,7 +642,7 @@ export default function PandoraReference() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Pandora Reference</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">Pandora Ordering</h2>
           <p className="text-sm text-muted-foreground">
             Pandora's build-to-level / discontinued master list, matched against our actual
             inventory by Design Number. Lives in its own database, separate from the main store data.

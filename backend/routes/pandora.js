@@ -1,5 +1,6 @@
-// Pandora Reference endpoints — manages a standalone reference copy of
-// Pandora's "build to level" / discontinued master list.
+// Pandora Ordering endpoints (frontend page: "Pandora Ordering", formerly
+// "Pandora Reference") — manages a standalone reference copy of Pandora's
+// "build to level" / discontinued master list.
 //
 // IMPORTANT: this data lives in its own database (`pandora_reference`,
 // see db/pandoraPool.js) and has NO relationship to burrows_jewellers.

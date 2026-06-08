@@ -16,7 +16,7 @@ This guide covers how to set up, run, and operate the Burrows Dashboard project 
 6. [Adding New Pages / Tools](#6-adding-new-pages--tools)
 7. [UI Design System — Tailwind CSS + shadcn/ui](#7-ui-design-system--tailwind-css--shadcnui)
 8. [Store Performance Dashboard — How the Widgets Work](#8-store-performance-dashboard--how-the-widgets-work)
-9. [Pandora Reference — Phase 2 (Standalone Reference Database)](#9-pandora-reference--phase-2-standalone-reference-database)
+9. [Pandora Ordering — Phase 2 (Standalone Reference Database)](#9-pandora-ordering--phase-2-standalone-reference-database)
 10. [Build & Deployment Workflow](#10-build--deployment-workflow)
 11. [Troubleshooting](#11-troubleshooting)
 
@@ -36,15 +36,14 @@ It consists of two parts:
 - ✅ **Phase 1 — Store Performance Dashboard (partial):** The homepage now shows two **live** widgets:
   - **Today's Sales by Store** — transaction count and total tendered (collected) sales per store for the current date
   - **Highest Supplier Cost (Stock on Hand)** — total inventory cost value (cost price × quantity on hand) ranked by vendor
-- ✅ **Phase 2 — Pandora Reference (standalone master list + CSV import):** A brand-new **"Pandora Reference"** page and a fully separate `pandora_reference` database now hold Pandora's build-to-level + discontinued-status master list, imported from a supplier CSV (one file covers both — see [§9](#9-pandora-reference--phase-2-standalone-reference-database) for the full breakdown of why this merged what were originally going to be two separate phases). Staff can upload a refreshed CSV at any time; re-imports upsert intelligently (only changed rows are touched) and the page shows live summary stats plus a searchable/filterable browse table.
+- ✅ **Phase 2 — Pandora Ordering (standalone master list + reorder comparison):** A brand-new **"Pandora Ordering"** page (originally built and shipped as **"Pandora Reference"**, then renamed — see the redesign note in [§9](#9-pandora-ordering--phase-2-standalone-reference-database)) and a fully separate `pandora_reference` database now hold Pandora's build-to-level + discontinued-status master list, refreshed from a supplier CSV (one file covers both — see §9 for the full breakdown of why this merged what were originally going to be two separate phases). Staff can update the list at any time via a small secondary control; updates upsert intelligently (only changed rows are touched). The page's headline feature is the **Reorder List** — comparing the master list's build-to-levels against actual on-hand stock to show exactly what to order today, with a department filter and one-click CSV export — and the summary cards double as quick filters into a simple master-list view.
 - ⏳ **Phase 3 (pending):** A third homepage widget — *current Pandora stock cost* — will be added now that the Pandora reference data (build-to-levels / discontinued list) has been imported in Phase 2.
 
 **Planned tools (placeholders currently in the nav, to be built in later phases):**
 - **Store Performance Dashboard** (homepage) — ✅ partially live (see above); Pandora stock-cost widget pending (Phase 3)
 - **Showcase Debt Reduction** — tracks debt paydown using Xero + sales/cost data
-- **Pandora Reference** — ✅ live (Phase 2) — see [§9](#9-pandora-reference--phase-2-standalone-reference-database)
-- **Pandora Ordering** — generates reorder suggestions by comparing the Pandora Reference build-to-levels against current stock on hand (Phase 4)
-- **Pandora Discontinued Products** — *folded into Pandora Reference* (Phase 2 merged this in — it's now just the "Discontinued" status filter on the master list, since the same CSV carries both build-to-level and discontinued-status data)
+- **Pandora Ordering** — ✅ live (Phase 2; originally shipped as "Pandora Reference", then renamed once its reorder-comparison + CSV-export feature became the headline of the page — the separate "Pandora Ordering" placeholder that used to sit alongside it has been removed) — see [§9](#9-pandora-ordering--phase-2-standalone-reference-database)
+- **Pandora Discontinued Products** — *folded into Pandora Ordering* (Phase 2 merged this in — it's now just the "Discontinued" summary card / status filter on the master list, since the same CSV carries both build-to-level and discontinued-status data)
 
 ---
 
@@ -63,7 +62,7 @@ burrows-dashboard/
 │   │   ├── auth.js           # POST /api/auth/login
 │   │   ├── health.js         # GET  /api/health  (DB connectivity check)
 │   │   ├── dashboard.js      # GET  /api/dashboard/today-sales, /top-suppliers
-│   │   └── pandora.js        # Pandora Reference: POST /import, GET /imports, /summary, /items (see §9)
+│   │   └── pandora.js        # Pandora Ordering: POST /import, GET /imports, /summary, /items, /reorder, /reorder/export (see §9)
 │   ├── .env                  # Local secrets/config (NOT committed)
 │   ├── .env.example          # Template for .env
 │   └── .gitignore
@@ -91,7 +90,7 @@ burrows-dashboard/
 │   │   ├── pages/
 │   │   │   ├── Login.jsx             # Tailwind/shadcn login card
 │   │   │   ├── StorePerformance.jsx  # Homepage — live widgets (today's sales, top suppliers)
-│   │   │   ├── PandoraReference.jsx  # Pandora Reference — CSV import + summary stats + searchable master list (see §9)
+│   │   │   ├── PandoraOrdering.jsx   # Pandora Ordering (renamed from PandoraReference.jsx) — summary cards, master-list panel, reorder comparison + CSV export (see §9)
 │   │   │   └── Placeholder.jsx       # Generic "coming soon" page for unbuilt tools
 │   │   ├── App.jsx           # Route definitions
 │   │   ├── index.css         # Tailwind v4 entry point + shadcn theme (CSS variables, @theme)
@@ -175,7 +174,7 @@ Then paste the resulting hash into `ADMIN_PASSWORD_HASH` in `backend/.env` (repl
 | `ADMIN_USERNAME` | The admin login username |
 | `ADMIN_PASSWORD_HASH` | Bcrypt hash of the admin password (see above for how to generate) |
 | `PGUSER`, `PGPASSWORD`, `PGHOST`, `PGPORT`, `PGDATABASE` | Connection details for the `burrows_jewellers` PostgreSQL database (same DB as `burrows-db-sync`) |
-| `PANDORA_PGUSER`, `PANDORA_PGPASSWORD`, `PANDORA_PGHOST`, `PANDORA_PGPORT`, `PANDORA_PGDATABASE` | Connection details for the **separate** `pandora_reference` database (see [§9](#9-pandora-reference--phase-2-standalone-reference-database)) — deliberately a distinct pool/connection from the main `PG*` vars so the two databases stay logically isolated, even though they currently live on the same local Postgres instance |
+| `PANDORA_PGUSER`, `PANDORA_PGPASSWORD`, `PANDORA_PGHOST`, `PANDORA_PGPORT`, `PANDORA_PGDATABASE` | Connection details for the **separate** `pandora_reference` database (see [§9](#9-pandora-ordering--phase-2-standalone-reference-database)) — deliberately a distinct pool/connection from the main `PG*` vars so the two databases stay logically isolated, even though they currently live on the same local Postgres instance |
 | `FRONTEND_ORIGIN` | The frontend's URL, used to configure CORS |
 
 ### `frontend/.env`
@@ -264,14 +263,16 @@ Follow the same pattern: add a query function to `routes/dashboard.js` (or a new
 
 ---
 
-## 9. Pandora Reference — Phase 2 (Standalone Reference Database)
+## 9. Pandora Ordering — Phase 2 (Standalone Reference Database)
 
-**Phase 2** added a brand-new tool: **Pandora Reference** (`/pandora-reference` in the nav, `frontend/src/pages/PandoraReference.jsx`). It manages Pandora's "build to level" / discontinued-status master list (refreshed from a CSV the supplier periodically provides), and — its headline feature — compares that master list against our actual on-hand inventory to tell staff exactly what to order today, with a one-click CSV export.
+**Phase 2** added a brand-new tool, currently named **Pandora Ordering** (`/pandora-ordering` in the nav, `frontend/src/pages/PandoraOrdering.jsx`). It manages Pandora's "build to level" / discontinued-status master list (refreshed from a CSV the supplier periodically provides), and — its headline feature — compares that master list against our actual on-hand inventory to tell staff exactly what to order today, with a one-click CSV export.
 
-> **Redesign note:** Phase 2 originally shipped with a prominent "Import Master List" card and a search/filter/browse table as the main content. After using it, the project owner asked for a redesign (documented here as the current/shipped design): the master list isn't something you "import" fresh each time — it's a living document staff *update* — so that capability moved to a small secondary control, the search/filter browse UI was removed in favour of making the summary cards themselves the browse entry points, and the main content became the **Reorder List**, a brand-new comparison feature against real inventory. The sections below describe the current shipped design; see git history for the original Phase 2 layout if needed.
+> **Redesign note:** Phase 2 originally shipped under the name **"Pandora Reference"** with a prominent "Import Master List" card and a search/filter/browse table as the main content. After using it, the project owner asked for a redesign (documented here as the first shipped redesign): the master list isn't something you "import" fresh each time — it's a living document staff *update* — so that capability moved to a small secondary control, the search/filter browse UI was removed in favour of making the summary cards themselves the browse entry points, and the main content became the **Reorder List**, a brand-new comparison feature against real inventory.
+>
+> **Rename note:** Once the Reorder List + CSV export became the page's headline feature, the project owner pointed out that a separate **"Pandora Ordering"** placeholder page already sat in the nav (planned as a future phase to do exactly this kind of reorder-suggestion work) — and asked to remove that placeholder and rename this page from "Pandora Reference" to "Pandora Ordering" instead, since it now *is* the ordering tool. So: the file was renamed `PandoraReference.jsx` → `PandoraOrdering.jsx`, the component `PandoraReference` → `PandoraOrdering`, the route `/pandora-reference` → `/pandora-ordering`, the on-page heading and nav label both now read "Pandora Ordering", and the old placeholder `<Route path="pandora-ordering" element={<Placeholder ... />} />` / nav entry was deleted outright (along with the now-unused `ClipboardList` icon import in `Layout.jsx`). The underlying `pandora_reference` **database** keeps its original name — only the page/route/component were renamed, not the data store. The sections below describe the current shipped design; see git history for the original "Pandora Reference" layout if needed.
 
 ### Why this merged two originally-separate phases into one
-The original roadmap had **Pandora Reference DB** (build-to-levels) and **Pandora Discontinued Products** as two separate future phases. Once we looked at the actual source file Pandora provides — `20251124_Pandora_OrderTemplate_ver4.csv`, with columns `Design#, Department, Description, Minimum Quantity, Status` — it became clear **both pieces of data live in the same CSV** ("Minimum Quantity" is the build-to-level, and a `Status` of `Discontinued` flags a design as discontinued). So rather than build two separate import pipelines and two separate pages, Phase 2 became **one CSV-driven master list** that both serves as the build-to-level reference *and* lets staff filter to "Discontinued" designs as a view of the same data. The standalone "Pandora Discontinued Products" placeholder in the nav is retired by this — it's now just the Status filter on the Pandora Reference page.
+The original roadmap had **Pandora Reference DB** (build-to-levels) and **Pandora Discontinued Products** as two separate future phases. Once we looked at the actual source file Pandora provides — `20251124_Pandora_OrderTemplate_ver4.csv`, with columns `Design#, Department, Description, Minimum Quantity, Status` — it became clear **both pieces of data live in the same CSV** ("Minimum Quantity" is the build-to-level, and a `Status` of `Discontinued` flags a design as discontinued). So rather than build two separate import pipelines and two separate pages, Phase 2 became **one CSV-driven master list** that both serves as the build-to-level reference *and* lets staff filter to "Discontinued" designs as a view of the same data. The standalone "Pandora Discontinued Products" placeholder in the nav is retired by this — it's now just a summary card / status filter on the Pandora Ordering page's master list.
 
 ### Critical design constraint — a logically separate database
 Per direction from the project owner: *"This database is not connected to the database that we have — this is mainly to have a reference of the build to level of Pandora items."* The Pandora reference data therefore lives in **its own PostgreSQL database, `pandora_reference`**, completely separate from `burrows_jewellers`:
@@ -325,8 +326,8 @@ This is where the standalone-database constraint really matters — it's a textb
 3. Build a `Map` from the inventory result and walk the master list, computing `reorderQty = Math.max(buildToLevel - onHand, 0)` for each design, then **filter to only designs where `reorderQty > 0`** — i.e. designs that are at or above their build-to-level are simply not "due" and don't appear in the list
 4. Discontinued designs are excluded entirely (the query only looks at `status = 'active'`) — per the project owner's direction, there's no point reordering something Pandora no longer makes
 
-### Frontend — `frontend/src/pages/PandoraReference.jsx`
-A single page (`/pandora-reference`, nav entry added to `Layout.jsx` with the `PackageSearch` icon). Current layout, top to bottom:
+### Frontend — `frontend/src/pages/PandoraOrdering.jsx`
+A single page (`/pandora-ordering`, nav entry in `Layout.jsx` reading "Pandora Ordering" with the `PackageSearch` icon — the file/component/route were all renamed from `PandoraReference`/`pandora-reference` as part of the rename described above). Current layout, top to bottom:
 
 - **Header** — title/description on the left, the small **`UpdateListControl`** on the right (a `<Button>` that toggles an absolutely-positioned popover panel — `left-0 top-full`, anchored to the button's left edge so it can't overlap the sidebar nav). The popover contains the file picker, "Update list" submit button, result summary (X new / Y updated / Z unchanged), and "Last updated: … on …" — i.e. all of the old prominent Import card's functionality, just tucked away as a secondary action since updating the list is an occasional housekeeping task, not the main thing staff come here to do
 - **`SummaryCards`** — the four stat cards (Total Designs, Active, Discontinued, Total Build-to-Level). The first three are now **clickable `<button>`s** (the `StatBox` component renders as a button with a green "active" ring when `onClick` is provided): clicking **Total Designs** / **Active** / **Discontinued** opens a `MasterListPanel` filtered to `''` (all) / `'active'` / `'discontinued'` respectively — i.e. the cards themselves are now the entry point for browsing the master list by status, replacing the old standalone search/filter card. Clicking the active card again closes the panel (simple toggle: `setMasterListFilter((current) => current === value ? null : value)`)
