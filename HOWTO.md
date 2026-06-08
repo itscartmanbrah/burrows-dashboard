@@ -380,12 +380,49 @@ A single page (`/pandora-functions`, nav entry in `Layout.jsx` reading "Pandora 
 
 ## 10. Build & Deployment Workflow
 
-**Local-first, always:**
-1. Build and test the feature completely on your local machine (against your local `burrows_jewellers` database)
+**Local-first, always — and deploys are manual, never automatic:**
+1. Build and test the feature completely on your local machine (against your local `burrows_jewellers` / `pandora_reference` databases)
 2. Confirm it works end-to-end (including a visual check in the browser)
-3. Only then plan and execute the deployment to the Digital Ocean droplet (`170.64.193.208`) — this will reuse the same patterns established for `burrows-db-sync` (see that project's `HOWTO.md` for server connection details)
+3. **Only when you explicitly decide it's ready** do we deploy to the live site. Pushing to `main` on GitHub does **not** automatically update the live dashboard — the server only updates when someone deliberately runs the steps below. This is intentional: it keeps the live site stable while local development continues, and avoids half-finished work going live by accident.
 
-Deployment steps for the dashboard itself (Nginx reverse proxy, process manager, subdomain/port, production build) will be documented here once we reach that stage.
+### Where it lives
+
+The dashboard is live at **https://dashboard.burrowsjewellers.com.au**, hosted on the same Digital Ocean droplet as `burrows-db-sync` (`170.64.193.208`, hostname `burrows-server`).
+
+| Layer | Setup |
+|---|---|
+| Reverse proxy / static hosting | **nginx**, config at `/etc/nginx/sites-available/dashboard.burrowsjewellers.com.au` — serves the built frontend from `frontend/dist`, proxies `/api/*` to the backend on `127.0.0.1:4000`, redirects HTTP → HTTPS |
+| Backend process | **pm2**, process name `burrows-dashboard-api`, configured to relaunch on server reboot (`pm2 save` + `pm2 startup`) |
+| SSL | Let's Encrypt certificate via `certbot --nginx`, auto-renews via the `certbot.timer` systemd unit |
+| Databases | The server runs its **own** local PostgreSQL — `burrows_jewellers` (kept in sync by `burrows-db-sync`) and a separate **`pandora_reference`** database (created specifically for this app; **not** connected to or shared with `burrows-db-sync` in any way — see §9's standalone-database constraint, which applies in production too) |
+| DNS | `dashboard.burrowsjewellers.com.au` is an **A record** pointing to `170.64.193.208`, managed through **Cloudflare** (the domain's nameservers point to Cloudflare even though it's registered via VentraIP). The record is set to **DNS only** (grey cloud, not proxied) so Let's Encrypt can verify the server directly. |
+| Firewall | `ufw` is active — only SSH (22), HTTP (80), and HTTPS (443) are allowed |
+| Production env | `backend/.env` and `frontend/.env.production` exist only on the server (not in git) — separate `JWT_SECRET`, `FRONTEND_ORIGIN=https://dashboard.burrowsjewellers.com.au`, and `VITE_API_BASE_URL=https://dashboard.burrowsjewellers.com.au/api`. DB credentials point at the server's own local Postgres (`PGHOST=localhost` from the server's perspective). The admin login is the same username/password as local dev (same bcrypt hash). |
+
+### How to deploy a change (manual, run only when you're ready)
+
+```bash
+ssh -i ~/.ssh/id_do_new root@170.64.193.208
+
+cd /var/www/burrows-dashboard
+git pull                              # pulls the latest from main — only do this when you're ready to go live
+
+# If backend code changed:
+cd backend && npm install --omit=dev  # only if package.json changed
+pm2 restart burrows-dashboard-api
+
+# If frontend code changed:
+cd ../frontend && npm install         # only if package.json changed
+npm run build                         # rebuilds dist/ — nginx serves it directly, no restart needed
+```
+
+That's the entire deploy — no database migrations are needed unless the change actually alters a schema (in which case, plan that step explicitly and back up first, e.g. `pg_dump`).
+
+### Useful server-side commands
+
+- `pm2 list` / `pm2 logs burrows-dashboard-api` — check the backend's status and logs
+- `systemctl status nginx` / `nginx -t` — check nginx status / validate config after edits
+- `certbot certificates` — check SSL certificate status and expiry
 
 ---
 
