@@ -16,8 +16,9 @@ This guide covers how to set up, run, and operate the Burrows Dashboard project 
 6. [Adding New Pages / Tools](#6-adding-new-pages--tools)
 7. [UI Design System — Tailwind CSS + shadcn/ui](#7-ui-design-system--tailwind-css--shadcnui)
 8. [Store Performance Dashboard — How the Widgets Work](#8-store-performance-dashboard--how-the-widgets-work)
-9. [Build & Deployment Workflow](#9-build--deployment-workflow)
-10. [Troubleshooting](#10-troubleshooting)
+9. [Pandora Reference — Phase 2 (Standalone Reference Database)](#9-pandora-reference--phase-2-standalone-reference-database)
+10. [Build & Deployment Workflow](#10-build--deployment-workflow)
+11. [Troubleshooting](#11-troubleshooting)
 
 ---
 
@@ -35,13 +36,15 @@ It consists of two parts:
 - ✅ **Phase 1 — Store Performance Dashboard (partial):** The homepage now shows two **live** widgets:
   - **Today's Sales by Store** — transaction count and total tendered (collected) sales per store for the current date
   - **Highest Supplier Cost (Stock on Hand)** — total inventory cost value (cost price × quantity on hand) ranked by vendor
-- ⏳ **Phase 3 (pending):** A third homepage widget — *current Pandora stock cost* — will be added once the Pandora reference data (build-to-levels / discontinued list CSV) has been imported in Phase 2.
+- ✅ **Phase 2 — Pandora Reference (standalone master list + CSV import):** A brand-new **"Pandora Reference"** page and a fully separate `pandora_reference` database now hold Pandora's build-to-level + discontinued-status master list, imported from a supplier CSV (one file covers both — see [§9](#9-pandora-reference--phase-2-standalone-reference-database) for the full breakdown of why this merged what were originally going to be two separate phases). Staff can upload a refreshed CSV at any time; re-imports upsert intelligently (only changed rows are touched) and the page shows live summary stats plus a searchable/filterable browse table.
+- ⏳ **Phase 3 (pending):** A third homepage widget — *current Pandora stock cost* — will be added now that the Pandora reference data (build-to-levels / discontinued list) has been imported in Phase 2.
 
 **Planned tools (placeholders currently in the nav, to be built in later phases):**
-- **Store Performance Dashboard** (homepage) — ✅ partially live (see above); Pandora stock-cost widget pending
+- **Store Performance Dashboard** (homepage) — ✅ partially live (see above); Pandora stock-cost widget pending (Phase 3)
 - **Showcase Debt Reduction** — tracks debt paydown using Xero + sales/cost data
-- **Pandora Ordering** — generates reorder suggestions from a supplier build-to-level CSV vs. current stock
-- **Pandora Discontinued Products** — marks/manages discontinued Pandora design numbers
+- **Pandora Reference** — ✅ live (Phase 2) — see [§9](#9-pandora-reference--phase-2-standalone-reference-database)
+- **Pandora Ordering** — generates reorder suggestions by comparing the Pandora Reference build-to-levels against current stock on hand (Phase 4)
+- **Pandora Discontinued Products** — *folded into Pandora Reference* (Phase 2 merged this in — it's now just the "Discontinued" status filter on the master list, since the same CSV carries both build-to-level and discontinued-status data)
 
 ---
 
@@ -52,13 +55,15 @@ burrows-dashboard/
 ├── backend/
 │   ├── index.js              # Express app entry point
 │   ├── db/
-│   │   └── pool.js           # PostgreSQL connection pool (burrows_jewellers)
+│   │   ├── pool.js           # PostgreSQL connection pool (burrows_jewellers — read-only mirror)
+│   │   └── pandoraPool.js    # SEPARATE connection pool (pandora_reference — app-owned, no FK/joins to burrows_jewellers)
 │   ├── middleware/
 │   │   └── auth.js           # JWT verification middleware (requireAuth)
 │   ├── routes/
 │   │   ├── auth.js           # POST /api/auth/login
 │   │   ├── health.js         # GET  /api/health  (DB connectivity check)
-│   │   └── dashboard.js      # GET  /api/dashboard/today-sales, /top-suppliers
+│   │   ├── dashboard.js      # GET  /api/dashboard/today-sales, /top-suppliers
+│   │   └── pandora.js        # Pandora Reference: POST /import, GET /imports, /summary, /items (see §9)
 │   ├── .env                  # Local secrets/config (NOT committed)
 │   ├── .env.example          # Template for .env
 │   └── .gitignore
@@ -86,6 +91,7 @@ burrows-dashboard/
 │   │   ├── pages/
 │   │   │   ├── Login.jsx             # Tailwind/shadcn login card
 │   │   │   ├── StorePerformance.jsx  # Homepage — live widgets (today's sales, top suppliers)
+│   │   │   ├── PandoraReference.jsx  # Pandora Reference — CSV import + summary stats + searchable master list (see §9)
 │   │   │   └── Placeholder.jsx       # Generic "coming soon" page for unbuilt tools
 │   │   ├── App.jsx           # Route definitions
 │   │   ├── index.css         # Tailwind v4 entry point + shadcn theme (CSS variables, @theme)
@@ -169,6 +175,7 @@ Then paste the resulting hash into `ADMIN_PASSWORD_HASH` in `backend/.env` (repl
 | `ADMIN_USERNAME` | The admin login username |
 | `ADMIN_PASSWORD_HASH` | Bcrypt hash of the admin password (see above for how to generate) |
 | `PGUSER`, `PGPASSWORD`, `PGHOST`, `PGPORT`, `PGDATABASE` | Connection details for the `burrows_jewellers` PostgreSQL database (same DB as `burrows-db-sync`) |
+| `PANDORA_PGUSER`, `PANDORA_PGPASSWORD`, `PANDORA_PGHOST`, `PANDORA_PGPORT`, `PANDORA_PGDATABASE` | Connection details for the **separate** `pandora_reference` database (see [§9](#9-pandora-reference--phase-2-standalone-reference-database)) — deliberately a distinct pool/connection from the main `PG*` vars so the two databases stay logically isolated, even though they currently live on the same local Postgres instance |
 | `FRONTEND_ORIGIN` | The frontend's URL, used to configure CORS |
 
 ### `frontend/.env`
@@ -257,7 +264,70 @@ Follow the same pattern: add a query function to `routes/dashboard.js` (or a new
 
 ---
 
-## 9. Build & Deployment Workflow
+## 9. Pandora Reference — Phase 2 (Standalone Reference Database)
+
+**Phase 2** added a brand-new tool: **Pandora Reference** (`/pandora-reference` in the nav, `frontend/src/pages/PandoraReference.jsx`). It imports and manages Pandora's "build to level" / discontinued-status master list from a CSV the supplier periodically provides, and lets staff search/browse it.
+
+### Why this merged two originally-separate phases into one
+The original roadmap had **Pandora Reference DB** (build-to-levels) and **Pandora Discontinued Products** as two separate future phases. Once we looked at the actual source file Pandora provides — `20251124_Pandora_OrderTemplate_ver4.csv`, with columns `Design#, Department, Description, Minimum Quantity, Status` — it became clear **both pieces of data live in the same CSV** ("Minimum Quantity" is the build-to-level, and a `Status` of `Discontinued` flags a design as discontinued). So rather than build two separate import pipelines and two separate pages, Phase 2 became **one CSV-driven master list** that both serves as the build-to-level reference *and* lets staff filter to "Discontinued" designs as a view of the same data. The standalone "Pandora Discontinued Products" placeholder in the nav is retired by this — it's now just the Status filter on the Pandora Reference page.
+
+### Critical design constraint — a logically separate database
+Per direction from the project owner: *"This database is not connected to the database that we have — this is mainly to have a reference of the build to level of Pandora items."* The Pandora reference data therefore lives in **its own PostgreSQL database, `pandora_reference`**, completely separate from `burrows_jewellers`:
+- **No foreign keys, no joins, no cross-database queries** between the two databases — they're connected to via two entirely separate connection pools (`backend/db/pool.js` for `burrows_jewellers`, `backend/db/pandoraPool.js` for `pandora_reference`)
+- `burrows_jewellers` remains a **read-only mirror** synced by `burrows-db-sync`; `pandora_reference` is **fully app-owned** (the dashboard backend has full read/write control and is the source of truth for it)
+- They happen to run on the same local Postgres instance for practicality during local development — "same server, different database" satisfies "not connected" while keeping local setup simple. (If this ever needs to change for production, that's a connection-string change only — the application code already treats them as fully independent.)
+- Matching Pandora reference data against our actual inventory (e.g. for the future Pandora Ordering tool) happens **in application code**, by looking up Design Numbers across both result sets — never via SQL joins across the databases
+
+### Database schema (`pandora_reference`)
+```sql
+CREATE TABLE pandora_items (
+  design_num      TEXT PRIMARY KEY,
+  department      TEXT,
+  description     TEXT,
+  build_to_level  INTEGER NOT NULL DEFAULT 0,
+  status          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'discontinued')),
+  imported_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- indexes on department and status for fast filtering
+
+CREATE TABLE pandora_imports (
+  id SERIAL PRIMARY KEY,
+  filename TEXT,
+  rows_total INTEGER DEFAULT 0,
+  rows_inserted INTEGER DEFAULT 0,
+  rows_updated INTEGER DEFAULT 0,
+  rows_unchanged INTEGER DEFAULT 0,
+  imported_at TIMESTAMPTZ DEFAULT now()
+);
+```
+- `pandora_items` — one row per Pandora design number; this is the master list staff browse/search
+- `pandora_imports` — a log of every CSV import (filename, row counts, timestamp) so staff can see when the list was last refreshed
+
+> The database was created locally with a small inline Node `pg` script (no `psql` was available in PATH on this machine) — see the project's git history / session notes if you need to recreate it elsewhere. The DDL above is the full schema; running it against a fresh `pandora_reference` database is sufficient to set it up from scratch.
+
+### Backend — `backend/routes/pandora.js`
+All endpoints are mounted at `/api/pandora` and protected by `requireAuth`:
+- **`POST /import`** — accepts a CSV file upload (`multipart/form-data`, field name `file`, handled by `multer` with in-memory storage, 10 MB limit). Parses it with `csv-parse/sync`, then **upserts** every row inside a transaction using a single `INSERT ... ON CONFLICT (design_num) DO UPDATE ... WHERE <fields> IS DISTINCT FROM ... RETURNING (xmax = 0) AS inserted` statement — this elegantly tells us in one round-trip whether each row was a fresh **insert** (`inserted = true`), a real **update** (row returned, `inserted = false`), or **unchanged** (no row returned, because the `WHERE` clause found nothing actually differed). A summary (`rowsTotal/rowsInserted/rowsUpdated/rowsUnchanged`) is recorded in `pandora_imports` and returned to the frontend. Column matching is tolerant of minor header variations (`pickColumn()` handles BOM characters, "Design#" vs "Design #", case differences, etc.)
+- **`GET /imports?limit=10`** — recent import history, used by the page to show "Last import: … on …"
+- **`GET /summary`** — quick counts for the stat cards: total designs, active/discontinued counts, total build-to-level units summed, a department breakdown, and the most recent import
+- **`GET /items?search=&department=&status=&page=&pageSize=`** — paginated, filterable browse of the master list; `search` matches against both Design Number and Description (case-insensitive `ILIKE`)
+
+### Frontend — `frontend/src/pages/PandoraReference.jsx`
+A single page (`/pandora-reference`, nav entry added to `Layout.jsx` with the `PackageSearch` icon) composed of:
+- **Summary stat cards** — Total Designs, Active, Discontinued, Total Build-to-Level (refreshes after every import)
+- **Import card** — file picker + Import button; posts the CSV to `/pandora/import` via `FormData`, shows a result summary (X new / Y updated / Z unchanged) and the last-import timestamp
+- **Master List browse card** — search box (debounced 250ms so typing doesn't spam the API), Department and Status `<select>` filters, and a paginated table (20 rows/page) with Prev/Next controls and green "Active" / red "Discontinued" status badges. Changing any filter resets back to page 1.
+
+### New dependencies
+`multer` and `csv-parse` were added to `backend/` (`npm install multer csv-parse`) for file upload handling and CSV parsing respectively.
+
+### Verification notes (local)
+The full pipeline was tested against the real supplier file `20251124_Pandora_OrderTemplate_ver4.csv` (3,789 design rows): import succeeded with 0 skipped rows, summary figures matched expectations (3,294 active / 495 discontinued / 2,637 total build-to-level units across departments like Rings, Charms, Bracelets, etc.), and **re-importing the identical file produced `0 inserted / 0 updated / 3,789 unchanged`** — confirming the upsert correctly avoids unnecessary writes on a refresh with no real changes. Search, department filter, status filter (including combined filters), and pagination were all verified end-to-end in the browser.
+
+---
+
+## 10. Build & Deployment Workflow
 
 **Local-first, always:**
 1. Build and test the feature completely on your local machine (against your local `burrows_jewellers` database)
@@ -268,7 +338,7 @@ Deployment steps for the dashboard itself (Nginx reverse proxy, process manager,
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 ### Backend won't start / can't connect to the database
 - Confirm PostgreSQL is running locally and `burrows_jewellers` exists (this is the same database used by `burrows-db-sync` — if that project works, the credentials should match)
