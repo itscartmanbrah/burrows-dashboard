@@ -1,0 +1,21 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.pipeline-check {
+  margin-top: 1.5rem;
+  background: #fff;
+  border-radius: 8px;
+  padding: 1.25rem;
+  max-width: 480px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+.pipeline-check h3 {
+  margin-top: 0;
+}
