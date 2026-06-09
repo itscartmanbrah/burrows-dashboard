@@ -77,8 +77,8 @@ function TodaySalesCard() {
         )}
         {data && (
           <>
-            <div className="overflow-hidden rounded-lg border">
-              <table className="w-full text-sm">
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="w-full min-w-[320px] text-sm">
                 <thead className="bg-muted/60 text-xs uppercase tracking-wide text-muted-foreground">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">Store</th>
@@ -151,8 +151,8 @@ function TopSuppliersCard() {
         )}
         {data && (
           <>
-            <div className="overflow-hidden rounded-lg border">
-              <table className="w-full text-sm">
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="w-full min-w-[320px] text-sm">
                 <thead className="bg-muted/60 text-xs uppercase tracking-wide text-muted-foreground">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">Supplier</th>
@@ -250,15 +250,15 @@ function SalesPaceCard() {
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-start justify-between space-y-0">
+      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:space-y-0">
         <div>
           <CardTitle className="text-base">Sales Pace vs Target</CardTitle>
           <CardDescription>
             {isToday ? "Today's" : `${dateLabel}'s`} cumulative sales against each store's daily target
           </CardDescription>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="flex flex-col items-end gap-1">
+        <div className="flex items-center gap-3 sm:self-start">
+          <div className="flex flex-col gap-1">
             <label htmlFor="sales-pace-date" className="text-[11px] font-medium text-muted-foreground">
               View date
             </label>
@@ -271,7 +271,7 @@ function SalesPaceCard() {
               className="h-8 rounded-md border border-input bg-background px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
           </div>
-          <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
             <Target className="size-4" />
           </div>
         </div>
@@ -294,7 +294,7 @@ function SalesPaceCard() {
         )}
         {data && data.stores.length > 0 && (
           <>
-            <div className="h-72 w-full">
+            <div className="h-56 w-full sm:h-72">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={data.chartData} margin={{ top: 8, right: 12, bottom: 0, left: -12 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -456,16 +456,16 @@ function SalesTrendCard() {
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-start justify-between space-y-0">
+      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:space-y-0">
         <div>
           <CardTitle className="text-base">Month-to-Date Sales Trend</CardTitle>
           <CardDescription>
             {data ? `Cumulative sales through ${data.monthLabel} so far` : 'Cumulative sales vs goal, last year and projection'}
           </CardDescription>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 sm:self-start">
           {data && data.availableStores.length > 0 && (
-            <div className="flex flex-col items-end gap-1">
+            <div className="flex flex-col gap-1">
               <label htmlFor="sales-trend-store" className="text-[11px] font-medium text-muted-foreground">
                 Store
               </label>
@@ -484,7 +484,7 @@ function SalesTrendCard() {
               </select>
             </div>
           )}
-          <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
             <Activity className="size-4" />
           </div>
         </div>
@@ -507,7 +507,7 @@ function SalesTrendCard() {
         )}
         {data && data.availableStores.length > 0 && (
           <>
-            <div className="h-72 w-full">
+            <div className="h-56 w-full sm:h-72">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={data.chartData} margin={{ top: 8, right: 12, bottom: 0, left: -12 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -688,16 +688,16 @@ function SupplierPerformanceCard() {
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-start justify-between space-y-0">
+      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:space-y-0">
         <div>
           <CardTitle className="text-base">Top Performing Suppliers</CardTitle>
           <CardDescription>
-            {active ? `Ranked by sales revenue — ${active.label}` : 'Ranked by sales revenue generated from each supplier’s items'}
+            {active ? `Ranked by sales revenue — ${active.label}` : "Ranked by sales revenue generated from each supplier’s items"}
           </CardDescription>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 sm:self-start">
           {data && data.availableStores.length > 0 && (
-            <div className="flex flex-col items-end gap-1">
+            <div className="flex flex-col gap-1">
               <label htmlFor="supplier-perf-store" className="text-[11px] font-medium text-muted-foreground">
                 Store
               </label>
@@ -716,7 +716,7 @@ function SupplierPerformanceCard() {
               </select>
             </div>
           )}
-          <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
             <Trophy className="size-4" />
           </div>
         </div>
@@ -752,8 +752,8 @@ function SupplierPerformanceCard() {
                     </p>
                   ) : (
                     <>
-                      <div className="overflow-hidden rounded-lg border">
-                        <table className="w-full text-sm">
+                      <div className="overflow-x-auto rounded-lg border">
+                        <table className="w-full min-w-[420px] text-sm">
                           <thead className="bg-muted/60 text-xs uppercase tracking-wide text-muted-foreground">
                             <tr>
                               <th className="px-3 py-2 text-left font-medium">Supplier</th>
@@ -799,7 +799,7 @@ export default function StorePerformance() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight">Store Performance Dashboard</h2>
+        <h2 className="text-xl font-semibold tracking-tight sm:text-2xl">Store Performance Dashboard</h2>
         <p className="text-sm text-muted-foreground">A live snapshot of how the business is tracking today.</p>
       </div>
 
