@@ -4,6 +4,7 @@
 
 const express = require('express');
 const pool = require('../db/pool');
+const pandoraPool = require('../db/pandoraPool');
 const { requireAuth } = require('../middleware/auth');
 const SALES_TARGETS = require('../config/salesTargets');
 
@@ -624,6 +625,98 @@ router.get('/supplier-performance', requireAuth, async (req, res) => {
           totalRevenue: totalOf('yearlyRevenue'),
         },
       },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/dashboard/pandora-stock-cost
+// Current on-hand cost value of Pandora stock, matched against the active
+// designs in the Pandora reference master list (pandora_reference DB) by
+// Design Number. Pulls all active reference designs, looks up real on-hand
+// quantities and unit costs from burrows_jewellers Items (vendorid = 'PANDO',
+// matched via realdesignnum), and returns a headline total plus a breakdown
+// by Pandora department (Bracelets, Charms, etc.).
+//
+// Matching is done entirely in application code — the two databases are
+// never joined via SQL. Matching key: pandora_items.design_num ↔
+// Items.realdesignnum (NOT Items.designnum — it lacks the dash suffix).
+// Stock cost per design = SUM(totalavailqoh) × AVG(cost) across all
+// burrows_jewellers records for that design number.
+router.get('/pandora-stock-cost', requireAuth, async (req, res) => {
+  try {
+    // 1. Pull all active designs + departments from the reference DB
+    const masterResult = await pandoraPool.query(`
+      SELECT design_num  AS "designNum",
+             COALESCE(department, 'Uncategorised') AS department
+      FROM   pandora_items
+      WHERE  status = 'active'
+    `);
+
+    if (masterResult.rows.length === 0) {
+      return res.json({
+        totalStockCost: 0,
+        totalUnits:     0,
+        designsInStock: 0,
+        designsTracked: 0,
+        departments:    [],
+        generatedAt:    new Date().toISOString(),
+      });
+    }
+
+    const designNums   = masterResult.rows.map((r) => r.designNum);
+    const deptByDesign = new Map(masterResult.rows.map((r) => [r.designNum, r.department]));
+
+    // 2. Look up on-hand stock for those design numbers in burrows_jewellers
+    const stockResult = await pool.query(
+      `SELECT realdesignnum                        AS "designNum",
+              SUM(totalavailqoh)::int              AS "onHand",
+              ROUND(AVG(cost)::numeric, 4)         AS "avgCost"
+       FROM   Items
+       WHERE  vendorid      = 'PANDO'
+         AND  realdesignnum IS NOT NULL
+         AND  realdesignnum <> ''
+         AND  realdesignnum = ANY($1::text[])
+       GROUP BY realdesignnum
+       HAVING SUM(totalavailqoh) > 0`,
+      [designNums]
+    );
+
+    // 3. Match in JS, compute department breakdown
+    const deptMap        = new Map();
+    let   totalStockCost = 0;
+    let   totalUnits     = 0;
+
+    for (const row of stockResult.rows) {
+      const onHand    = Number(row.onHand);
+      const avgCost   = row.avgCost !== null ? Number(row.avgCost) : null;
+      const stockCost = avgCost !== null ? onHand * avgCost : 0;
+      const dept      = deptByDesign.get(row.designNum) || 'Uncategorised';
+
+      totalStockCost += stockCost;
+      totalUnits     += onHand;
+
+      if (!deptMap.has(dept)) {
+        deptMap.set(dept, { department: dept, stockCost: 0, units: 0, designs: 0 });
+      }
+      const d = deptMap.get(dept);
+      d.stockCost += stockCost;
+      d.units     += onHand;
+      d.designs   += 1;
+    }
+
+    const departments = [...deptMap.values()]
+      .map((d) => ({ ...d, stockCost: Math.round(d.stockCost * 100) / 100 }))
+      .sort((a, b) => b.stockCost - a.stockCost);
+
+    res.json({
+      totalStockCost: Math.round(totalStockCost * 100) / 100,
+      totalUnits,
+      designsInStock: stockResult.rows.length,
+      designsTracked: masterResult.rows.length,
+      departments,
+      generatedAt: new Date().toISOString(),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

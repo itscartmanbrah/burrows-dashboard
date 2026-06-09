@@ -1,13 +1,13 @@
 // Store Performance Dashboard — the homepage.
-// Phase 1 widgets:
+// Widgets:
 //   - Today's sales per store
-//   - Highest supplier cost (inventory cost value tied up per vendor)
-// A third widget (current Pandora stock cost) will be added in Phase 3,
-// once the Pandora reference data (build-to-levels / discontinued list)
-// has been imported.
+//   - Sales pace vs target
+//   - Sales trend (weekly chart)
+//   - Top performing suppliers (by revenue)
+//   - Pandora stock value (on-hand cost matched against reference list)
 
 import { Fragment, useEffect, useState } from 'react';
-import { TrendingUp, Package, Target, Activity, Trophy, Loader2 } from 'lucide-react';
+import { TrendingUp, Package, Target, Activity, Trophy, Gem, Loader2 } from 'lucide-react';
 import {
   ResponsiveContainer,
   LineChart,
@@ -795,6 +795,111 @@ function SupplierPerformanceCard() {
   );
 }
 
+// ── Pandora Stock Value ────────────────────────────────────────────────────
+// Shows the total on-hand cost of Pandora inventory, matched against the
+// active designs in the Pandora reference master list (pandora_reference DB)
+// by Design Number, with a breakdown by Pandora department.
+function PandoraStockValueCard() {
+  const [data, setData]   = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    apiClient
+      .get('/dashboard/pandora-stock-cost')
+      .then((res) => setData(res.data))
+      .catch((err) => setError(err.response?.data?.error || err.message));
+  }, []);
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:space-y-0">
+        <div>
+          <CardTitle className="text-base">Pandora Stock Value</CardTitle>
+          <CardDescription>On-hand inventory cost matched against Pandora reference list by Design Number</CardDescription>
+        </div>
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <Gem className="size-4" />
+        </div>
+      </CardHeader>
+
+      <CardContent>
+        {error && (
+          <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            Error: {error}
+          </p>
+        )}
+        {!error && !data && (
+          <CardState icon={Loader2}>
+            <span className="animate-pulse">Loading…</span>
+          </CardState>
+        )}
+        {data && (
+          <>
+            {/* Headline total */}
+            <div className="mb-6 text-center">
+              <p className="text-3xl font-bold tabular-nums">{currency.format(data.totalStockCost)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">total Pandora inventory cost on hand</p>
+            </div>
+
+            {/* Stats row */}
+            <div className="mb-5 grid grid-cols-3 divide-x rounded-lg border text-center text-sm">
+              <div className="px-2 py-3">
+                <p className="font-semibold tabular-nums">{number.format(data.designsInStock)}</p>
+                <p className="text-xs text-muted-foreground">designs in stock</p>
+              </div>
+              <div className="px-2 py-3">
+                <p className="font-semibold tabular-nums">{number.format(data.totalUnits)}</p>
+                <p className="text-xs text-muted-foreground">total units</p>
+              </div>
+              <div className="px-2 py-3">
+                <p className="font-semibold tabular-nums">{number.format(data.designsTracked)}</p>
+                <p className="text-xs text-muted-foreground">designs tracked</p>
+              </div>
+            </div>
+
+            {/* Department breakdown */}
+            {data.departments.length > 0 && (
+              <div className="overflow-x-auto rounded-lg border">
+                <table className="min-w-[360px] w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/40 text-xs text-muted-foreground">
+                      <th className="px-4 py-2 text-left font-medium">Department</th>
+                      <th className="px-4 py-2 text-right font-medium">Designs</th>
+                      <th className="px-4 py-2 text-right font-medium">Units</th>
+                      <th className="px-4 py-2 text-right font-medium">Stock Cost</th>
+                      <th className="px-4 py-2 text-right font-medium">Share</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.departments.map((dept, i) => (
+                      <tr key={dept.department} className={i % 2 !== 0 ? 'bg-muted/20' : ''}>
+                        <td className="px-4 py-2 font-medium">{dept.department}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">{number.format(dept.designs)}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">{number.format(dept.units)}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">{currency.format(dept.stockCost)}</td>
+                        <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">
+                          {data.totalStockCost > 0
+                            ? `${((dept.stockCost / data.totalStockCost) * 100).toFixed(1)}%`
+                            : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <p className="mt-3 text-xs text-muted-foreground">
+              Matched {number.format(data.designsInStock)} of {number.format(data.designsTracked)} active reference
+              designs against live inventory. Stock cost = on-hand units × average unit cost. Excludes discontinued designs.
+            </p>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function StorePerformance() {
   return (
     <div className="flex flex-col gap-6">
@@ -814,10 +919,7 @@ export default function StorePerformance() {
 
       <SupplierPerformanceCard />
 
-      <p className="text-xs text-muted-foreground">
-        Note: a fourth widget — current Pandora stock cost — will appear here once the Pandora
-        reference data (build-to-levels / discontinued list) has been imported (Phase 2 → 3).
-      </p>
+      <PandoraStockValueCard />
     </div>
   );
 }
