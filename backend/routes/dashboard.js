@@ -648,9 +648,24 @@ router.get('/supplier-performance', requireAuth, async (req, res) => {
 // Items.realdesignnum (NOT Items.designnum — it lacks the dash suffix).
 router.get('/pandora-stock-cost', requireAuth, async (req, res) => {
   try {
-    // 1. ALL on-hand Pandora stock, grouped by design number — mirrors the
-    //    Cost x QOH methodology used by /top-suppliers so the total here
-    //    reflects the real money tied up in Pandora stock.
+    // 1. The exact headline total — unfiltered, ungrouped, identical
+    //    methodology to /top-suppliers — so this matches Pandora's row in
+    //    "Highest Supplier Cost" to the cent. This includes a small number
+    //    of SKUs whose net on-hand across stores is zero or negative
+    //    (oversold/returns-in-transit), which DO pull the true total down
+    //    slightly — excluding them would overstate the figure.
+    const totalResult = await pool.query(`
+      SELECT ROUND(SUM(i.cost * COALESCE(q.availqoh, 0)), 2)::float AS "totalStockCost",
+             SUM(COALESCE(q.availqoh, 0))::int                      AS "totalUnits"
+      FROM Items i
+      LEFT JOIN ItemQOH q ON i.sku = q.sku
+      WHERE i.vendorid = 'PANDO'
+    `);
+    const totalStockCost = Number(totalResult.rows[0].totalStockCost) || 0;
+    const totalUnits     = Number(totalResult.rows[0].totalUnits) || 0;
+
+    // 2. Pandora stock currently on shelves (net on-hand > 0 per design),
+    //    grouped by design number — used for the department breakdown.
     const stockResult = await pool.query(`
       SELECT COALESCE(NULLIF(i.realdesignnum, ''), i.sku) AS "designNum",
              SUM(COALESCE(q.availqoh, 0))::int            AS "onHand",
@@ -662,7 +677,7 @@ router.get('/pandora-stock-cost', requireAuth, async (req, res) => {
       HAVING SUM(COALESCE(q.availqoh, 0)) > 0
     `);
 
-    // 2. Department labels from the reference master list (any status —
+    // 3. Department labels from the reference master list (any status —
     //    this is just for categorising the breakdown, not for filtering).
     const masterResult = await pandoraPool.query(`
       SELECT design_num AS "designNum",
@@ -671,11 +686,11 @@ router.get('/pandora-stock-cost', requireAuth, async (req, res) => {
     `);
     const deptByDesign = new Map(masterResult.rows.map((r) => [r.designNum, r.department]));
 
-    // 3. Totals + department breakdown
-    const deptMap        = new Map();
-    let   totalStockCost = 0;
-    let   totalUnits     = 0;
-    let   matchedDesigns = 0;
+    // 4. Department breakdown for the on-shelf stock
+    const deptMap          = new Map();
+    let   matchedDesigns   = 0;
+    let   breakdownCost    = 0;
+    let   breakdownUnits   = 0;
 
     for (const row of stockResult.rows) {
       const onHand    = Number(row.onHand);
@@ -684,8 +699,8 @@ router.get('/pandora-stock-cost', requireAuth, async (req, res) => {
       const dept      = matched ? deptByDesign.get(row.designNum) : 'Not in reference list';
 
       if (matched) matchedDesigns += 1;
-      totalStockCost += stockCost;
-      totalUnits     += onHand;
+      breakdownCost  += stockCost;
+      breakdownUnits += onHand;
 
       if (!deptMap.has(dept)) {
         deptMap.set(dept, { department: dept, stockCost: 0, units: 0, designs: 0 });
@@ -699,6 +714,22 @@ router.get('/pandora-stock-cost', requireAuth, async (req, res) => {
     const departments = [...deptMap.values()]
       .map((d) => ({ ...d, stockCost: Math.round(d.stockCost * 100) / 100 }))
       .sort((a, b) => b.stockCost - a.stockCost);
+
+    // 5. Reconciliation row — designs whose net on-hand is zero or negative
+    //    are excluded from the breakdown above (they have no "department"
+    //    worth showing), but their cost/units still count toward the
+    //    headline total. Surface the difference so the table foots to the
+    //    headline exactly, instead of silently being ~$1-2K off.
+    const adjustmentCost  = Math.round((totalStockCost - breakdownCost) * 100) / 100;
+    const adjustmentUnits = totalUnits - breakdownUnits;
+    if (Math.abs(adjustmentCost) >= 0.01 || adjustmentUnits !== 0) {
+      departments.push({
+        department: 'Other (zero/negative net stock)',
+        stockCost: adjustmentCost,
+        units: adjustmentUnits,
+        designs: null,
+      });
+    }
 
     res.json({
       totalStockCost: Math.round(totalStockCost * 100) / 100,

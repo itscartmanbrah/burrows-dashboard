@@ -20,6 +20,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import apiClient from '../api/client';
+import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import {
   Card,
@@ -872,9 +873,17 @@ function PandoraStockValueCard() {
                   </thead>
                   <tbody>
                     {data.departments.map((dept, i) => (
-                      <tr key={dept.department} className={i % 2 !== 0 ? 'bg-muted/20' : ''}>
+                      <tr
+                        key={dept.department}
+                        className={cn(
+                          i % 2 !== 0 && 'bg-muted/20',
+                          dept.designs === null && 'text-muted-foreground italic'
+                        )}
+                      >
                         <td className="px-4 py-2 font-medium">{dept.department}</td>
-                        <td className="px-4 py-2 text-right tabular-nums">{number.format(dept.designs)}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">
+                          {dept.designs === null ? '—' : number.format(dept.designs)}
+                        </td>
                         <td className="px-4 py-2 text-right tabular-nums">{number.format(dept.units)}</td>
                         <td className="px-4 py-2 text-right tabular-nums">{currency.format(dept.stockCost)}</td>
                         <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">
