@@ -632,68 +632,58 @@ router.get('/supplier-performance', requireAuth, async (req, res) => {
 });
 
 // GET /api/dashboard/pandora-stock-cost
-// Current on-hand cost value of Pandora stock, matched against the active
-// designs in the Pandora reference master list (pandora_reference DB) by
-// Design Number. Pulls all active reference designs, looks up real on-hand
-// quantities and unit costs from burrows_jewellers Items (vendorid = 'PANDO',
-// matched via realdesignnum), and returns a headline total plus a breakdown
-// by Pandora department (Bracelets, Charms, etc.).
+// The real total cost value of ALL Pandora-vendor stock currently on hand —
+// same methodology as the "Highest Supplier Cost" widget's Pandora row
+// (Cost x on-hand qty from ItemQOH, summed across all stores), so this
+// headline figure is the actual money tied up in Pandora inventory, not
+// just the subset that happens to appear on the Pandora reference list.
+//
+// The reference master list (pandora_reference DB) is used ONLY to label
+// each design with its Pandora department for the breakdown table — designs
+// that aren't on the reference list (yet) are grouped under "Not in
+// reference list" rather than being dropped from the total.
 //
 // Matching is done entirely in application code — the two databases are
 // never joined via SQL. Matching key: pandora_items.design_num ↔
 // Items.realdesignnum (NOT Items.designnum — it lacks the dash suffix).
-// Stock cost per design = SUM(totalavailqoh) × AVG(cost) across all
-// burrows_jewellers records for that design number.
 router.get('/pandora-stock-cost', requireAuth, async (req, res) => {
   try {
-    // 1. Pull all active designs + departments from the reference DB
-    const masterResult = await pandoraPool.query(`
-      SELECT design_num  AS "designNum",
-             COALESCE(department, 'Uncategorised') AS department
-      FROM   pandora_items
-      WHERE  status = 'active'
+    // 1. ALL on-hand Pandora stock, grouped by design number — mirrors the
+    //    Cost x QOH methodology used by /top-suppliers so the total here
+    //    reflects the real money tied up in Pandora stock.
+    const stockResult = await pool.query(`
+      SELECT COALESCE(NULLIF(i.realdesignnum, ''), i.sku) AS "designNum",
+             SUM(COALESCE(q.availqoh, 0))::int            AS "onHand",
+             ROUND(SUM(i.cost * COALESCE(q.availqoh, 0)), 2) AS "stockCost"
+      FROM Items i
+      LEFT JOIN ItemQOH q ON i.sku = q.sku
+      WHERE i.vendorid = 'PANDO'
+      GROUP BY COALESCE(NULLIF(i.realdesignnum, ''), i.sku)
+      HAVING SUM(COALESCE(q.availqoh, 0)) > 0
     `);
 
-    if (masterResult.rows.length === 0) {
-      return res.json({
-        totalStockCost: 0,
-        totalUnits:     0,
-        designsInStock: 0,
-        designsTracked: 0,
-        departments:    [],
-        generatedAt:    new Date().toISOString(),
-      });
-    }
-
-    const designNums   = masterResult.rows.map((r) => r.designNum);
+    // 2. Department labels from the reference master list (any status —
+    //    this is just for categorising the breakdown, not for filtering).
+    const masterResult = await pandoraPool.query(`
+      SELECT design_num AS "designNum",
+             COALESCE(department, 'Uncategorised') AS department
+      FROM   pandora_items
+    `);
     const deptByDesign = new Map(masterResult.rows.map((r) => [r.designNum, r.department]));
 
-    // 2. Look up on-hand stock for those design numbers in burrows_jewellers
-    const stockResult = await pool.query(
-      `SELECT realdesignnum                        AS "designNum",
-              SUM(totalavailqoh)::int              AS "onHand",
-              ROUND(AVG(cost)::numeric, 4)         AS "avgCost"
-       FROM   Items
-       WHERE  vendorid      = 'PANDO'
-         AND  realdesignnum IS NOT NULL
-         AND  realdesignnum <> ''
-         AND  realdesignnum = ANY($1::text[])
-       GROUP BY realdesignnum
-       HAVING SUM(totalavailqoh) > 0`,
-      [designNums]
-    );
-
-    // 3. Match in JS, compute department breakdown
+    // 3. Totals + department breakdown
     const deptMap        = new Map();
     let   totalStockCost = 0;
     let   totalUnits     = 0;
+    let   matchedDesigns = 0;
 
     for (const row of stockResult.rows) {
       const onHand    = Number(row.onHand);
-      const avgCost   = row.avgCost !== null ? Number(row.avgCost) : null;
-      const stockCost = avgCost !== null ? onHand * avgCost : 0;
-      const dept      = deptByDesign.get(row.designNum) || 'Uncategorised';
+      const stockCost = Number(row.stockCost);
+      const matched   = deptByDesign.has(row.designNum);
+      const dept      = matched ? deptByDesign.get(row.designNum) : 'Not in reference list';
 
+      if (matched) matchedDesigns += 1;
       totalStockCost += stockCost;
       totalUnits     += onHand;
 
@@ -714,7 +704,7 @@ router.get('/pandora-stock-cost', requireAuth, async (req, res) => {
       totalStockCost: Math.round(totalStockCost * 100) / 100,
       totalUnits,
       designsInStock: stockResult.rows.length,
-      designsTracked: masterResult.rows.length,
+      matchedToReference: matchedDesigns,
       departments,
       generatedAt: new Date().toISOString(),
     });

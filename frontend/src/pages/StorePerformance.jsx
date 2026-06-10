@@ -815,7 +815,7 @@ function PandoraStockValueCard() {
       <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:space-y-0">
         <div>
           <CardTitle className="text-base">Pandora Stock Value</CardTitle>
-          <CardDescription>On-hand inventory cost matched against Pandora reference list by Design Number</CardDescription>
+          <CardDescription>Total cost value of all Pandora inventory currently on hand, by department</CardDescription>
         </div>
         <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
           <Gem className="size-4" />
@@ -852,8 +852,8 @@ function PandoraStockValueCard() {
                 <p className="text-xs text-muted-foreground">total units</p>
               </div>
               <div className="px-2 py-3">
-                <p className="font-semibold tabular-nums">{number.format(data.designsTracked)}</p>
-                <p className="text-xs text-muted-foreground">designs tracked</p>
+                <p className="font-semibold tabular-nums">{number.format(data.matchedToReference)}</p>
+                <p className="text-xs text-muted-foreground">matched to reference list</p>
               </div>
             </div>
 
@@ -890,8 +890,10 @@ function PandoraStockValueCard() {
             )}
 
             <p className="mt-3 text-xs text-muted-foreground">
-              Matched {number.format(data.designsInStock)} of {number.format(data.designsTracked)} active reference
-              designs against live inventory. Stock cost = on-hand units × average unit cost. Excludes discontinued designs.
+              Total cost value of all Pandora-vendor stock currently on hand (cost x quantity, summed across stores) —
+              the same figure as Pandora's row in "Highest Supplier Cost". The reference list is used only to label
+              each design's department below; stock for designs not yet on the list appears under
+              "Not in reference list".
             </p>
           </>
         )}
