@@ -24,6 +24,9 @@ const XERO_CONNECTIONS_URL = 'https://api.xero.com/connections';
 const XERO_API_BASE = 'https://api.xero.com/api.xro/2.0';
 
 const DEFAULT_SCOPES = [
+  'openid',
+  'profile',
+  'email',
   'offline_access',
   'accounting.contacts.read',
   'accounting.reports.read',
