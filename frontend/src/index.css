@@ -128,3 +128,29 @@
     @apply bg-background text-foreground;
   }
 }
+
+/*
+ * Print support — used by pages that expose a "Print / Export" button
+ * (e.g. the JIMACO Payment Plan summary). Wrap the printable content in a
+ * container with the `print-area` class; everything else on the page is
+ * hidden when printing, and the printable area is reset to a plain
+ * white-background, full-width document.
+ */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-area, .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    margin: 0;
+    padding: 1rem;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
