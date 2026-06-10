@@ -5,7 +5,7 @@
 // reduction reporting will be added here.
 
 import { useCallback, useEffect, useState } from 'react';
-import { Link2, Loader2, CheckCircle2, AlertCircle, TrendingDown } from 'lucide-react';
+import { Link2, Loader2, CheckCircle2, AlertCircle, TrendingDown, CreditCard } from 'lucide-react';
 import apiClient from '../api/client';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -113,6 +113,97 @@ function SupplierDebtCard() {
 
             <p className="text-xs text-muted-foreground">
               Generated {dateTime.format(new Date(data.generatedAt))} from Xero Accounts Payable balances.
+            </p>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function CardBalancesCard() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { data } = await apiClient.get('/xero/card-balances');
+      setData(data);
+    } catch (err) {
+      setError(err.response?.data?.error || err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <CreditCard className="size-5" />
+          Card & Bank Account Balances
+        </CardTitle>
+        <CardDescription>
+          Credit cards and bank accounts that are currently in debit, from Xero's Balance Sheet.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+            Loading account balances…
+          </div>
+        ) : error ? (
+          <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <AlertCircle className="mt-0.5 size-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        ) : (
+          <>
+            <div className="rounded-lg border bg-card px-4 py-3">
+              <p className="text-sm text-muted-foreground">Total owed across cards & accounts</p>
+              <p className="text-2xl font-semibold tracking-tight">{currency.format(data.totalOwed)}</p>
+            </div>
+
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50 text-left">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Account</th>
+                    <th className="px-3 py-2 text-right font-medium">Owed</th>
+                    <th className="px-3 py-2 text-right font-medium">In credit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.cards.map((c) => (
+                    <tr key={c.name} className="border-t">
+                      <td className="px-3 py-2">{c.name}</td>
+                      <td
+                        className={cn(
+                          'px-3 py-2 text-right',
+                          c.owed > 0 && 'text-destructive font-medium'
+                        )}
+                      >
+                        {c.owed > 0 ? currency.format(c.owed) : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {c.inCredit > 0 ? currency.format(c.inCredit) : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              As at {data.asAt} — generated {dateTime.format(new Date(data.generatedAt))} from Xero's Balance Sheet report.
             </p>
           </>
         )}
@@ -239,7 +330,12 @@ export default function ShowcaseDebtReduction() {
         </CardContent>
       </Card>
 
-      {status?.connected && <SupplierDebtCard />}
+      {status?.connected && (
+        <>
+          <SupplierDebtCard />
+          <CardBalancesCard />
+        </>
+      )}
     </div>
   );
 }

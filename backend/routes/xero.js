@@ -129,4 +129,71 @@ router.get('/supplier-debt', requireAuth, async (req, res) => {
   }
 });
 
+// Recursively flattens a Balance Sheet report's nested Section/Row structure
+// into a flat list of { name, current, topSection, subSection }, where
+// topSection is "Assets" / "Liabilities" / "Equity" and subSection is the
+// nested grouping (e.g. "Bank", "Current Liabilities").
+function flattenBalanceSheetRows(rows, topSection = null, subSection = null, out = []) {
+  for (const r of rows) {
+    if (r.RowType === 'Section') {
+      const title = r.Title || '';
+      let nextTop = topSection;
+      let nextSub = subSection;
+      if (topSection === null) {
+        nextTop = title;
+      } else {
+        nextSub = title;
+      }
+      if (r.Rows) flattenBalanceSheetRows(r.Rows, nextTop, nextSub, out);
+    } else if (r.RowType === 'Row' && r.Cells?.length >= 2) {
+      const name = r.Cells[0]?.Value;
+      const current = parseFloat(r.Cells[1]?.Value || '0') || 0;
+      out.push({ name, current, topSection, subSection });
+    }
+  }
+  return out;
+}
+
+// Credit card / charge card accounts and how much is currently owed on them.
+// Sourced from the Balance Sheet (bank accounts that are overdrawn = owed,
+// credit-card liability accounts with a positive balance = owed).
+router.get('/card-balances', requireAuth, async (req, res) => {
+  try {
+    const data = await xero.xeroApiGet('/Reports/BalanceSheet');
+    const report = data.Reports?.[0];
+    if (!report) {
+      return res.status(500).json({ error: 'No Balance Sheet report returned by Xero' });
+    }
+
+    const allRows = flattenBalanceSheetRows(report.Rows);
+
+    const cardPattern = /visa|amex|american express|mastercard|\bcard\b|zeller/i;
+    const cards = allRows
+      .filter((r) => cardPattern.test(r.name) && r.current !== 0)
+      .map((r) => {
+        const isAsset = r.topSection === 'Assets';
+        const owed = isAsset ? Math.max(0, -r.current) : Math.max(0, r.current);
+        const inCredit = isAsset ? Math.max(0, r.current) : Math.max(0, -r.current);
+        return {
+          name: r.name,
+          balance: Math.round(r.current * 100) / 100,
+          owed: Math.round(owed * 100) / 100,
+          inCredit: Math.round(inCredit * 100) / 100,
+        };
+      })
+      .sort((a, b) => b.owed - a.owed);
+
+    const totalOwed = Math.round(cards.reduce((sum, c) => sum + c.owed, 0) * 100) / 100;
+
+    return res.json({
+      cards,
+      totalOwed,
+      asAt: report.ReportTitles?.[2] || report.ReportDate,
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
