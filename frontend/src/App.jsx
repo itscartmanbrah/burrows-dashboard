@@ -5,6 +5,7 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import StorePerformance from './pages/StorePerformance';
 import PandoraFunctions from './pages/PandoraFunctions';
+import ShowcaseDebtReduction from './pages/ShowcaseDebtReduction';
 import Placeholder from './pages/Placeholder';
 
 export default function App() {
@@ -21,7 +22,7 @@ export default function App() {
           }
         >
           <Route index element={<StorePerformance />} />
-          <Route path="debt-reduction" element={<Placeholder title="Showcase Debt Reduction" />} />
+          <Route path="debt-reduction" element={<ShowcaseDebtReduction />} />
           <Route path="pandora-functions" element={<PandoraFunctions />} />
         </Route>
         <Route path="*" element={<Placeholder title="Page not found" />} />

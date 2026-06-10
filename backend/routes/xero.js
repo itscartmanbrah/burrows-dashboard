@@ -18,6 +18,10 @@ const xero = require('../services/xeroClient');
 
 const router = express.Router();
 
+// Returns the Xero consent URL as JSON (rather than redirecting directly)
+// so the frontend — which authenticates via an Authorization header, not a
+// cookie — can fetch this with axios and then navigate the browser itself
+// via window.location.href.
 router.get('/connect', requireAuth, (req, res) => {
   if (!process.env.XERO_CLIENT_ID || !process.env.XERO_CLIENT_SECRET || !process.env.XERO_REDIRECT_URI) {
     return res.status(500).json({ error: 'Xero is not configured on the server (missing XERO_CLIENT_ID / XERO_CLIENT_SECRET / XERO_REDIRECT_URI)' });
@@ -25,7 +29,7 @@ router.get('/connect', requireAuth, (req, res) => {
 
   const state = jwt.sign({ purpose: 'xero-oauth' }, process.env.JWT_SECRET, { expiresIn: '10m' });
   const url = xero.buildAuthorizeUrl(state);
-  return res.redirect(url);
+  return res.json({ url });
 });
 
 router.get('/callback', async (req, res) => {
