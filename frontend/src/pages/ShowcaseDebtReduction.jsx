@@ -5,8 +5,9 @@
 // reduction reporting will be added here.
 
 import { useCallback, useEffect, useState } from 'react';
-import { Link2, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Link2, Loader2, CheckCircle2, AlertCircle, TrendingDown } from 'lucide-react';
 import apiClient from '../api/client';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -20,6 +21,105 @@ const dateTime = new Intl.DateTimeFormat('en-AU', {
   dateStyle: 'medium',
   timeStyle: 'short',
 });
+
+const currency = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' });
+
+function SupplierDebtCard() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { data } = await apiClient.get('/xero/supplier-debt');
+      setData(data);
+    } catch (err) {
+      setError(err.response?.data?.error || err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <TrendingDown className="size-5" />
+          Supplier Debt (Accounts Payable)
+        </CardTitle>
+        <CardDescription>
+          Outstanding balances owed to suppliers, from Xero — sorted by amount owed.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+            Loading supplier balances…
+          </div>
+        ) : error ? (
+          <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <AlertCircle className="mt-0.5 size-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="rounded-lg border bg-card px-4 py-3">
+                <p className="text-sm text-muted-foreground">Total owed to suppliers</p>
+                <p className="text-2xl font-semibold tracking-tight">{currency.format(data.totalOutstanding)}</p>
+              </div>
+              <div className="rounded-lg border bg-card px-4 py-3">
+                <p className="text-sm text-muted-foreground">Of which overdue</p>
+                <p className="text-2xl font-semibold tracking-tight text-destructive">
+                  {currency.format(data.totalOverdue)}
+                </p>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50 text-left">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Supplier</th>
+                    <th className="px-3 py-2 text-right font-medium">Outstanding</th>
+                    <th className="px-3 py-2 text-right font-medium">Overdue</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.suppliers.map((s) => (
+                    <tr key={s.contactId} className="border-t">
+                      <td className="px-3 py-2">{s.name}</td>
+                      <td className="px-3 py-2 text-right">{currency.format(s.outstanding)}</td>
+                      <td
+                        className={cn(
+                          'px-3 py-2 text-right',
+                          s.overdue > 0 && 'text-destructive font-medium'
+                        )}
+                      >
+                        {s.overdue > 0 ? currency.format(s.overdue) : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Generated {dateTime.format(new Date(data.generatedAt))} from Xero Accounts Payable balances.
+            </p>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function ShowcaseDebtReduction() {
   const [status, setStatus] = useState(null);
@@ -123,16 +223,7 @@ export default function ShowcaseDebtReduction() {
         </CardContent>
       </Card>
 
-      {status?.connected && (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-            <p className="font-medium">Debt reduction reporting coming soon</p>
-            <p className="text-sm text-muted-foreground">
-              Now that Xero is connected, the next step is to build the showcase/consignment debt views here.
-            </p>
-          </CardContent>
-        </Card>
-      )}
+      {status?.connected && <SupplierDebtCard />}
     </div>
   );
 }

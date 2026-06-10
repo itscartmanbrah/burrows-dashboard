@@ -84,4 +84,49 @@ router.get('/status', requireAuth, async (req, res) => {
   }
 });
 
+// Suppliers we owe money to (Accounts Payable), sorted by amount outstanding.
+// Used by the "Showcase Debt Reduction" tab to show which suppliers have the
+// most debt to pay down.
+router.get('/supplier-debt', requireAuth, async (req, res) => {
+  try {
+    let contacts = [];
+    for (let page = 1; page <= 10; page++) {
+      const data = await xero.xeroApiGet('/Contacts', {
+        where: 'IsSupplier==true',
+        summaryOnly: 'false',
+        page,
+      });
+      contacts = contacts.concat(data.Contacts || []);
+      if (!data.Contacts || data.Contacts.length < 100) break;
+    }
+
+    const suppliers = contacts
+      .filter((c) => c.Balances?.AccountsPayable?.Outstanding > 0)
+      .map((c) => ({
+        name: c.Name,
+        contactId: c.ContactID,
+        outstanding: Math.round(c.Balances.AccountsPayable.Outstanding * 100) / 100,
+        overdue: Math.round((c.Balances.AccountsPayable.Overdue || 0) * 100) / 100,
+      }))
+      .sort((a, b) => b.outstanding - a.outstanding);
+
+    const totals = suppliers.reduce(
+      (acc, s) => ({
+        outstanding: acc.outstanding + s.outstanding,
+        overdue: acc.overdue + s.overdue,
+      }),
+      { outstanding: 0, overdue: 0 }
+    );
+
+    return res.json({
+      suppliers,
+      totalOutstanding: Math.round(totals.outstanding * 100) / 100,
+      totalOverdue: Math.round(totals.overdue * 100) / 100,
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
