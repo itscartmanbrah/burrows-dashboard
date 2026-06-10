@@ -23,12 +23,10 @@ const XERO_TOKEN_URL = 'https://identity.xero.com/connect/token';
 const XERO_CONNECTIONS_URL = 'https://api.xero.com/connections';
 const XERO_API_BASE = 'https://api.xero.com/api.xro/2.0';
 
-// NOTE: accounting.transactions.read, accounting.reports.read and
-// accounting.journals.read are NOT enabled for the OpenClaw Xero app
-// (requesting them returns invalid_scope) — only the scopes below are
-// currently usable. If invoice-level / aged-receivables report data is
-// needed later, those scopes must be enabled for the app in the Xero
-// Developer Portal (Configuration > Scopes) before adding them here.
+// NOTE: this app uses Xero's new granular scopes (apps created after
+// 2 March 2026 no longer have access to the old broad scopes like
+// "accounting.reports.read" / "accounting.transactions.read" — those
+// return invalid_scope). Use the specific granular scope names instead.
 const DEFAULT_SCOPES = [
   'openid',
   'profile',
@@ -36,6 +34,10 @@ const DEFAULT_SCOPES = [
   'offline_access',
   'accounting.contacts.read',
   'accounting.settings.read',
+  'accounting.reports.balancesheet.read',
+  'accounting.reports.aged.read',
+  'accounting.invoices.read',
+  'accounting.banktransactions.read',
 ];
 
 async function ensureTable() {
