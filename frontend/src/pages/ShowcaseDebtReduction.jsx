@@ -182,17 +182,33 @@ export default function ShowcaseDebtReduction() {
               Checking connection status…
             </div>
           ) : status?.connected ? (
-            <div className="flex items-center gap-2 text-sm">
-              <CheckCircle2 className="size-4 text-green-600" />
-              <span>
-                Connected to <strong>{status.tenantName || 'Xero organisation'}</strong>
-                {status.lastUpdated && (
-                  <span className="text-muted-foreground">
-                    {' '}
-                    — last refreshed {dateTime.format(new Date(status.lastUpdated))}
-                  </span>
-                )}
-              </span>
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-2 text-sm">
+                <CheckCircle2 className="size-4 text-green-600" />
+                <span>
+                  Connected to <strong>{status.tenantName || 'Xero organisation'}</strong>
+                  {status.lastUpdated && (
+                    <span className="text-muted-foreground">
+                      {' '}
+                      — last refreshed {dateTime.format(new Date(status.lastUpdated))}
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div>
+                <Button variant="outline" size="sm" onClick={handleConnect} disabled={connecting}>
+                  {connecting ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" /> Redirecting…
+                    </>
+                  ) : (
+                    'Reconnect / update permissions'
+                  )}
+                </Button>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Use this if Xero permissions have changed (e.g. new data was enabled) and need re-authorising.
+                </p>
+              </div>
             </div>
           ) : (
             <div className="flex flex-col gap-3">
