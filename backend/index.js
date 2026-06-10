@@ -11,6 +11,7 @@ const healthRoutes = require('./routes/health');
 const authRoutes = require('./routes/auth');
 const dashboardRoutes = require('./routes/dashboard');
 const pandoraRoutes = require('./routes/pandora');
+const xeroRoutes = require('./routes/xero');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -23,6 +24,7 @@ app.use('/api/health', healthRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/pandora', pandoraRoutes);
+app.use('/api/xero', xeroRoutes);
 
 // 404 handler
 app.use((req, res) => {
